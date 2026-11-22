@@ -2,8 +2,11 @@
 // Types and pure functions only, so both sides (and the tests) can import it.
 
 import type { Vec2 } from "../instruments/Instrument";
+import type { EnvDiag, LoadDiag } from "./diagnostics";
 
 export type DelegateName = "GPU" | "CPU";
+/** How the worker hands a frame to MediaPipe (see config.workerInput). */
+export type WorkerInput = "bitmap" | "canvas";
 
 // --- main -> worker ---
 
@@ -24,6 +27,7 @@ export interface FrameMessage {
   seq: number;
   /** Strictly increasing ms (MediaPipe requires it). */
   ts: number;
+  input: WorkerInput;
   /** Transferred (moved, not copied) to the worker. The worker closes it. */
   bitmap: ImageBitmap;
 }
@@ -39,6 +43,13 @@ export interface ReadyMessage {
   loadMs: number;
   /** Set when GPU was asked for but CPU is running; says why. */
   fallbackReason?: string;
+  diag: LoadDiag;
+}
+
+/** Sent once when the worker starts: what the worker's own scope can do (OffscreenCanvas, WebGL2, which GPU...). */
+export interface EnvMessage {
+  type: "env";
+  env: EnvDiag;
 }
 
 export interface ResultMessage {
@@ -65,7 +76,7 @@ export interface ErrorMessage {
   message: string;
 }
 
-export type FromWorker = ReadyMessage | ResultMessage | SkippedMessage | ErrorMessage;
+export type FromWorker = EnvMessage | ReadyMessage | ResultMessage | SkippedMessage | ErrorMessage;
 
 // --- landmark packing (a small typed array moves cheaper than 21 objects per hand) ---
 

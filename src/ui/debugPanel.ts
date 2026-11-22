@@ -1,6 +1,7 @@
-// Debug panel (toggle with D): FPS, inference time, pinch values, live tunables, "Copy config".
+// Debug panel (toggle with D): FPS, inference time, pinch values, live tunables, "Copy config", "Copy report", benchmark.
 
 import { DEFAULT_CONFIG, TUNABLES, config, resetConfig } from "../config";
+import { describeGl, interestingLogs, type EnvDiag } from "../core/diagnostics";
 import { pinchRatio } from "../core/gestures";
 import type { TrackerStats } from "../core/tracking";
 import type { HandFrame } from "../instruments/Instrument";
@@ -10,6 +11,10 @@ export interface DebugInfo {
   renderFps: number;
   /** JS time of one render tick (whole rAF callback) and of its video-draw part. Rolling summary. */
   render: { jsAvgMs: number; jsP95Ms: number; jsMaxMs: number; videoDrawAvgMs: number; dpr: number };
+  /** Time between two drawn frames (ms). A long max = something blocked the main thread. */
+  renderGap: { avgMs: number; p95Ms: number; maxMs: number };
+  /** How far ahead the skeleton is drawn right now (ms), 0 = off. */
+  drawLeadMs: number;
   tracker: TrackerStats | null;
   frame: HandFrame | null;
   audio: {
@@ -27,13 +32,33 @@ export interface DebugInfo {
 export interface DebugActions {
   toggleRecord(): void;
   beep(): void;
-  /** Called after any control changed config (and after Reset): lets main apply things like the GPU/CPU delegate. */
+  /** Called after any control changed config (and after Reset): lets main apply things like the tracking mode. */
   applyConfig(): void;
+  /** Restarts every rolling number (tracking and render), so a new setting can be measured cleanly. */
+  resetNumbers(): void;
+  /** Pauses tracking, measures the main-thread paths (see core/benchmark.ts), resumes. Resolves with the report lines. */
+  runBenchmark(log: (text: string) => void): Promise<string[]>;
 }
 
 type ConfigBag = Record<string, number | boolean | string>;
 
 const f = (n: number, d = 1): string => (Number.isFinite(n) ? n.toFixed(d) : "-");
+const yesNo = (b: boolean): string => (b ? "yes" : "NO");
+const baseName = (path: string): string => path.split("?")[0]!.split("/").pop() || path;
+
+function mb(bytes: number): string {
+  return bytes > 0 ? `${(bytes / 1048576).toFixed(1)} MB` : "size n/a";
+}
+
+/** One line (plus one for a second GPU) about a scope's WebGL: the line the owner sends back as "worker GL". */
+function glLines(label: string, env: EnvDiag | null, notRunning: string): string[] {
+  if (!env) return [`${label} ${notRunning}`];
+  const out = [`${label} OffscreenCanvas ${yesNo(env.offscreenCanvas)} | WebGL2 ${describeGl(env.gl)}`];
+  if (env.glHigh.ok && env.glHigh.renderer !== env.gl.renderer) {
+    out.push(`            high-performance context gives another GPU: ${env.glHigh.renderer}`);
+  }
+  return out;
+}
 
 export class DebugPanel {
   private readonly root: HTMLElement;
@@ -41,20 +66,45 @@ export class DebugPanel {
   private readonly hands: HTMLElement;
   private readonly recButton: HTMLButtonElement;
   private readonly copyButton: HTMLButtonElement;
+  private readonly reportButton: HTMLButtonElement;
+  private readonly benchButton: HTMLButtonElement;
+  private readonly bench: HTMLElement;
+  private benchLines: string[] = [];
+  private lastReport = "";
   private readonly refreshers: Array<() => void> = [];
   private copyTimer = 0;
+  private reportTimer = 0;
   private readonly actions: DebugActions;
 
   constructor(parent: HTMLElement, actions: DebugActions) {
     this.actions = actions;
     this.stats = el("pre", { class: "dbg-stats" });
     this.hands = el("div", { class: "dbg-hands" });
+    this.bench = el("pre", { class: "dbg-stats dbg-bench" });
 
     this.recButton = el("button", { class: "btn btn-small", textContent: "Record (R)", onclick: () => actions.toggleRecord() });
     this.copyButton = el("button", {
       class: "btn btn-small",
       textContent: "Copy config",
       onclick: () => void this.copyConfig(),
+    });
+    this.reportButton = el("button", {
+      class: "btn btn-small",
+      textContent: "Copy report",
+      title: "Copies the numbers above (and the benchmark, if you ran it) as text",
+      onclick: () => void this.copyReport(),
+    });
+    this.benchButton = el("button", {
+      class: "btn btn-small",
+      textContent: "Run benchmark",
+      title: "Keep your hands in view. Takes 15-25 s, tracking pauses meanwhile.",
+      onclick: () => void this.runBenchmark(),
+    });
+    const resetNumbers = el("button", {
+      class: "btn btn-small",
+      textContent: "Reset numbers",
+      title: "Start the averages again (use after changing a setting, then wait ~15 s)",
+      onclick: () => actions.resetNumbers(),
     });
     const beep = el("button", { class: "btn btn-small", textContent: "Beep", onclick: () => actions.beep() });
     const reset = el("button", {
@@ -73,7 +123,8 @@ export class DebugPanel {
       el("div", { class: "dbg-title", textContent: "Debug (D to hide)" }),
       this.stats,
       this.hands,
-      el("div", { class: "dbg-buttons" }, this.recButton, beep, this.copyButton, reset),
+      el("div", { class: "dbg-buttons" }, this.reportButton, resetNumbers, this.benchButton, this.recButton, beep, this.copyButton, reset),
+      this.bench,
       this.buildTunables(),
     );
     parent.append(this.root);
@@ -92,35 +143,70 @@ export class DebugPanel {
     this.refreshers.forEach((r) => r());
   }
 
-  update(info: DebugInfo): void {
-    if (!this.visible) return;
+  /** The text lines of the stats block. The same lines go into "Copy report". */
+  private buildLines(info: DebugInfo): string[] {
     const t = info.tracker;
     const lines: string[] = [];
     const r = info.render;
+    const g = info.renderGap;
     lines.push(
       `render      ${f(info.renderFps, 0)} fps   canvas ${info.canvas.width}x${info.canvas.height} @${f(r.dpr, 2)}x   JS ${f(r.jsAvgMs, 2)} ms avg | p95 ${f(r.jsP95Ms, 2)} | max ${f(r.jsMaxMs, 1)}  (video draw ${f(r.videoDrawAvgMs, 2)})`,
     );
-    if (t) {
+    lines.push(
+      `  gap       between drawn frames: avg ${f(g.avgMs)} ms | p95 ${f(g.p95Ms)} | max ${f(g.maxMs)}${config.renderFpsCap > 0 ? `   (render cap ${config.renderFpsCap} fps)` : ""}`,
+    );
+    if (!t) {
+      lines.push("tracking    not started");
+    } else {
+      const worker = t.mode === "worker";
       lines.push(
-        `tracking    ${f(t.trackingFps, 0)} fps   (camera ${f(t.cameraFps, 0)} fps, ${f(t.droppedPercent, 0)}% not sent: worker busy)`,
+        `MODE        ${t.mode.toUpperCase()}   delegate ${t.delegate}${worker ? `   worker input ${config.workerInput}` : ""}   infer every ${config.inferEvery}   numHands ${config.numHands}   camera ${t.cameraSettings}`,
       );
-      lines.push(`worker      ${t.workerState}   delegate ${t.delegate}   video ${t.videoWidth}x${t.videoHeight}`);
+      lines.push(
+        `tracking    ${f(t.trackingFps, 0)} fps   (camera ${f(t.cameraFps, 0)} fps; ${f(t.notSentPercent, 0)}% of camera frames not used = ${f(t.skippedEveryPercent, 0)}% skipped by "infer every" + ${f(t.missedByBrowserPercent, 0)}% missed by the browser + ${f(t.busyPercent, 0)}% worker busy)`,
+      );
+      if (!worker) lines.push(`  main thread inside MediaPipe: ${f(t.mainBlockedPercent, 0)}% of every second (tracking fps x inference avg)`);
+      lines.push(`backend     ${t.workerState}   video ${t.videoWidth}x${t.videoHeight}`);
       if (t.fallbackReason) lines.push(`            ! ${t.fallbackReason}`);
+
+      // Evidence about where MediaPipe really runs (Stage 0.6).
+      const scopeEnv = worker ? t.envWorker : t.envMain;
+      lines.push(...glLines("worker GL  ", t.envWorker, worker ? "(not reported yet)" : "(no worker in main mode)"));
+      lines.push(...glLines("main GL    ", t.envMain, "(not probed yet)"));
+      if (t.envWorker && t.envMain) {
+        lines.push(
+          `  same GPU in worker and page: ${t.envWorker.gl.renderer === t.envMain.gl.renderer ? "yes" : "NO (different renderer)"}`,
+        );
+      }
+      if (scopeEnv) {
+        lines.push(
+          `env         WASM SIMD ${yesNo(scopeEnv.simd)} | threads ${scopeEnv.threads ? "yes" : "no (the MediaPipe WASM we use is single-threaded anyway)"} | cores ${scopeEnv.cores} | WebGPU ${scopeEnv.webgpu ? "yes" : "no"}`,
+        );
+      }
+      if (t.load) {
+        const files = t.load.files.filter((x) => /\.(task|wasm)$/i.test(x.name));
+        lines.push(
+          `files       model ${baseName(t.load.modelUrl)} (${t.load.modelUrl.split("/").slice(-3, -1).join("/")}) | wasm ${baseName(t.load.wasmBinaryPath)} | loaded in ${f(t.load.loadMs, 0)} ms`,
+        );
+        if (files.length > 0) lines.push(`            fetched: ${files.map((x) => `${x.name} ${mb(x.bytes)} ${f(x.ms, 0)} ms`).join(", ")}`);
+        const logs = interestingLogs(t.load.logs, 4);
+        lines.push(logs.length > 0 ? `mediapipe   ${logs.join("\n            ")}` : "mediapipe   (no delegate/GL lines in its console output)");
+      }
+
       lines.push(
-        `inference   ${f(t.inferenceMs)} ms now | avg ${f(t.inferenceAvgMs)} | p95 ${f(t.inferenceP95Ms)} | max ${f(t.inferenceMaxMs)}   (measured in the worker)`,
+        `inference   ${f(t.inferenceMs)} ms now | avg ${f(t.inferenceAvgMs)} | p95 ${f(t.inferenceP95Ms)} | max ${f(t.inferenceMaxMs)}   (${worker ? "measured inside the worker" : "main thread: blocks rendering"})`,
       );
       lines.push(
-        `frame age   ${f(t.frameAgeMs, 0)} ms now | avg ${f(t.frameAgeAvgMs, 0)} | p95 ${f(t.frameAgeP95Ms, 0)}   (camera capture -> landmarks on main thread)`,
+        `frame age   ${f(t.frameAgeMs, 0)} ms now | avg ${f(t.frameAgeAvgMs, 0)} | p95 ${f(t.frameAgeP95Ms, 0)}   (camera capture -> landmarks ready)`,
       );
+      if (info.drawLeadMs > 0) lines.push(`  skeleton drawn ${f(info.drawLeadMs, 0)} ms ahead (draw lag fix on)`);
       if (!t.frameAgeFromCapture && t.framesWithHands + t.framesNoHands > 0) {
         lines.push("            ! browser gave no capture time: age is too small by the camera delay");
       }
-      lines.push(`  parts     grab ${f(t.grabAvgMs)} ms | worker round trip ${f(t.roundTripAvgMs)} ms`);
+      if (worker) lines.push(`  parts     grab ${f(t.grabAvgMs)} ms | worker round trip ${f(t.roundTripAvgMs)} ms`);
       lines.push(
         `  session   hands in view: ${f(t.avgWithHandsMs)} ms (${t.framesWithHands} fr) | no hands: ${f(t.avgNoHandsMs)} ms (${t.framesNoHands} fr)${t.watchdogTimeouts ? `  watchdog ${t.watchdogTimeouts}x` : ""}`,
       );
-    } else {
-      lines.push("tracking    not started");
     }
     if (info.audio) {
       const a = info.audio;
@@ -134,7 +220,13 @@ export class DebugPanel {
         ? `recording   ● ${f(info.recording.seconds)}s, ${info.recording.frames} frames`
         : "recording   off (press R)",
     );
-    this.stats.textContent = lines.join("\n");
+    return lines;
+  }
+
+  update(info: DebugInfo): void {
+    if (!this.visible) return;
+    this.lastReport = this.buildLines(info).join("\n");
+    this.stats.textContent = this.lastReport;
     this.recButton.textContent = info.recording.active ? "Stop + save (R)" : "Record (R)";
 
     this.hands.replaceChildren();
@@ -164,6 +256,22 @@ export class DebugPanel {
         ),
       );
     }
+  }
+
+  private async runBenchmark(): Promise<void> {
+    this.benchButton.disabled = true;
+    this.benchLines = ["Benchmark running. Keep your hands in view and move them a little..."];
+    this.bench.textContent = this.benchLines.join("\n");
+    try {
+      const lines = await this.actions.runBenchmark((text) => {
+        this.bench.textContent = `${text}\nKeep your hands in view and move them a little...`;
+      });
+      this.benchLines = ["Benchmark (main thread, same camera, 30 frames each):", ...lines];
+    } catch (e) {
+      this.benchLines = [`Benchmark failed: ${e instanceof Error ? e.message : String(e)}`];
+    }
+    this.bench.textContent = this.benchLines.join("\n");
+    this.benchButton.disabled = false;
   }
 
   private buildTunables(): HTMLElement {
@@ -226,26 +334,41 @@ export class DebugPanel {
     return wrap;
   }
 
-  private async copyConfig(): Promise<void> {
-    const text = JSON.stringify(config, null, 2);
-    let ok = false;
+  /** Clipboard with a fallback for pages where navigator.clipboard is blocked. */
+  private async copyText(text: string): Promise<boolean> {
     try {
       await navigator.clipboard.writeText(text);
-      ok = true;
+      return true;
     } catch {
       const ta = el("textarea", { value: text, style: "position:fixed;left:-9999px;top:0" });
       document.body.append(ta);
       ta.select();
+      let ok = false;
       try {
         ok = document.execCommand("copy");
       } catch {
         ok = false;
       }
       ta.remove();
+      return ok;
     }
+  }
+
+  private async copyConfig(): Promise<void> {
+    const text = JSON.stringify(config, null, 2);
+    const ok = await this.copyText(text);
     this.copyButton.textContent = ok ? "Copied!" : "Copy failed (see console)";
     window.clearTimeout(this.copyTimer);
     this.copyTimer = window.setTimeout(() => (this.copyButton.textContent = "Copy config"), 1500);
+    if (!ok) console.log(text);
+  }
+
+  private async copyReport(): Promise<void> {
+    const text = [this.lastReport, ...(this.benchLines.length > 1 ? ["", ...this.benchLines] : [])].join("\n");
+    const ok = await this.copyText(text);
+    this.reportButton.textContent = ok ? "Copied!" : "Copy failed (see console)";
+    window.clearTimeout(this.reportTimer);
+    this.reportTimer = window.setTimeout(() => (this.reportButton.textContent = "Copy report"), 1500);
     if (!ok) console.log(text);
   }
 }

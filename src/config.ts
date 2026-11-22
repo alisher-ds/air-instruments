@@ -30,14 +30,27 @@ export interface Config {
   /** Bend angle (radians) at the middle joint that counts as curl = 1. */
   curlFullBendRad: number;
 
-  // --- tracking worker ---
-  /** MediaPipe delegate. Switching it live reloads the model inside the worker (a second or two). */
+  // --- tracking: where MediaPipe runs and how it is fed (Stage 0.6 speed test bench; all of these are saved) ---
+  /** "worker" = MediaPipe in a Web Worker (render never waits). "main" = on the main thread (the Stage 0 way). */
+  trackMode: "worker" | "main";
+  /** MediaPipe delegate. Switching it live reloads the model (a second or two). */
   delegate: "GPU" | "CPU";
+  /**
+   * Worker only: how the camera frame reaches MediaPipe. "bitmap" = the transferred ImageBitmap as it is.
+   * "canvas" = first drawn onto an OffscreenCanvas inside the worker (a different upload path to the GPU).
+   */
+  workerInput: "bitmap" | "canvas";
   /**
    * When the worker finishes a frame and a newer camera frame arrived meanwhile, send that newest frame
    * right away (older ones are dropped, there is never a queue). Off = wait for the next camera frame.
    */
   pickupOnFree: boolean;
+  /** Run MediaPipe on every Nth camera frame only (1 = every frame). Frees the GPU/main thread at the cost of fps. */
+  inferEvery: number;
+  /** How many hands MediaPipe looks for (1 or 2). Reloads the model. */
+  numHands: number;
+  /** Camera size. A TEST toggle: reopens the camera. */
+  cameraRes: "640x480" | "320x240" | "1280x720";
 
   // --- predictive triggering (groundwork, OFF by default, no instrument uses it yet) ---
   predictEnabled: boolean;
@@ -46,6 +59,14 @@ export interface Config {
   /** The extrapolated shift is never longer than this, as a fraction of handSize (so a glitchy velocity cannot fling a point). */
   predictMaxShift: number;
 
+  // --- visual lag compensation (DRAWING ONLY: instruments never see these shifted points) ---
+  /** Draw the hand skeleton moved forward by the measured frame age, using the hand velocity. */
+  drawLeadEnabled: boolean;
+  /** Never extrapolate further ahead than this many ms. */
+  drawLeadMaxMs: number;
+  /** The drawn shift is never longer than this, as a fraction of handSize (so it can not overshoot far when a hand stops). */
+  drawLeadMaxShift: number;
+
   // --- rendering ---
   /** 0..1 black overlay on the video so light effects pop. */
   videoDim: number;
@@ -53,6 +74,8 @@ export interface Config {
   videoFit: "cover" | "contain";
   /** Upper limit for devicePixelRatio (hard cap 2). Lower = fewer pixels to fill = faster render. */
   maxDpr: number;
+  /** Draw at most this many frames per second (0 = every display frame). A speed TEST: does less GPU work for render help inference? */
+  renderFpsCap: number;
 
   // --- recording ---
   recordMaxSeconds: number;
@@ -73,17 +96,27 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   velocityAlpha: 0.6,
   curlFullBendRad: 2.2,
 
+  trackMode: "worker",
   delegate: "GPU",
+  workerInput: "bitmap",
   pickupOnFree: true,
+  inferEvery: 1,
+  numHands: 2,
+  cameraRes: "640x480",
 
   predictEnabled: false,
   predictLeadMs: 33,
   predictMaxShift: 0.5,
 
+  drawLeadEnabled: true,
+  drawLeadMaxMs: 150,
+  drawLeadMaxShift: 0.5,
+
   videoDim: 0.5,
   showHands: false,
   videoFit: "cover",
   maxDpr: 2,
+  renderFpsCap: 0,
 
   recordMaxSeconds: 60,
 });
@@ -121,8 +154,13 @@ export type Tunable = NumberTunable | BooleanTunable | ChoiceTunable;
 
 /** What the debug panel shows as live controls. */
 export const TUNABLES: Tunable[] = [
+  { kind: "choice", group: "Tracking", key: "trackMode", label: "tracking mode", options: ["worker", "main"] },
   { kind: "choice", group: "Tracking", key: "delegate", label: "delegate (GPU/CPU)", options: ["GPU", "CPU"] },
+  { kind: "choice", group: "Tracking", key: "workerInput", label: "worker input", options: ["bitmap", "canvas"] },
   { kind: "boolean", group: "Tracking", key: "pickupOnFree", label: "grab newest when free" },
+  { kind: "number", group: "Tracking", key: "inferEvery", label: "infer every Nth frame", min: 1, max: 3, step: 1 },
+  { kind: "number", group: "Tracking", key: "numHands", label: "numHands", min: 1, max: 2, step: 1 },
+  { kind: "choice", group: "Tracking", key: "cameraRes", label: "camera size (test)", options: ["640x480", "320x240", "1280x720"] },
   { kind: "number", group: "Smoothing", key: "minCutoff", label: "minCutoff", min: 0.1, max: 10, step: 0.1 },
   { kind: "number", group: "Smoothing", key: "beta", label: "beta", min: 0, max: 50, step: 0.5 },
   { kind: "number", group: "Smoothing", key: "dCutoff", label: "dCutoff", min: 0.1, max: 10, step: 0.1 },
@@ -136,6 +174,10 @@ export const TUNABLES: Tunable[] = [
   { kind: "boolean", group: "View", key: "showHands", label: "show hands" },
   { kind: "choice", group: "View", key: "videoFit", label: "video fit", options: ["cover", "contain"] },
   { kind: "number", group: "View", key: "maxDpr", label: "max pixel ratio", min: 1, max: 2, step: 0.25 },
+  { kind: "number", group: "View", key: "renderFpsCap", label: "render fps cap (0 = off)", min: 0, max: 60, step: 5 },
+  { kind: "boolean", group: "Draw lag fix", key: "drawLeadEnabled", label: "draw skeleton ahead (by frame age)" },
+  { kind: "number", group: "Draw lag fix", key: "drawLeadMaxMs", label: "max lead (ms)", min: 0, max: 300, step: 10 },
+  { kind: "number", group: "Draw lag fix", key: "drawLeadMaxShift", label: "max shift (x handSize)", min: 0.05, max: 1.5, step: 0.05 },
   { kind: "boolean", group: "Prediction", key: "predictEnabled", label: "predict (not used yet)" },
   { kind: "number", group: "Prediction", key: "predictLeadMs", label: "lead (ms)", min: 0, max: 100, step: 1 },
   { kind: "number", group: "Prediction", key: "predictMaxShift", label: "max shift (x handSize)", min: 0.05, max: 1, step: 0.05 },
@@ -147,6 +189,12 @@ export const TUNABLES: Tunable[] = [
 
 export const CAMERA = { width: 640, height: 480 } as const;
 
+/** Sizes for the "camera size (test)" toggle. */
+export function cameraSize(res: Config["cameraRes"]): { width: number; height: number } {
+  const [w, h] = res.split("x").map(Number);
+  return w && h ? { width: w, height: h } : { width: CAMERA.width, height: CAMERA.height };
+}
+
 /** Hard upper limit for devicePixelRatio (PLAN.md section 5). */
 export const MAX_DPR_CAP = 2;
 
@@ -155,7 +203,7 @@ export const MAX_DPR_CAP = 2;
  * int8 return 404). So there is no model variant to switch between; the delegate is the only speed switch.
  */
 
-/** Number of hands MediaPipe is asked to find. */
+/** Largest number of hands tracked at once (ids, smoothing). MediaPipe itself is asked for `config.numHands` (1 or 2). */
 export const NUM_HANDS = 2;
 export const MP_CONFIDENCE = {
   minHandDetectionConfidence: 0.5,

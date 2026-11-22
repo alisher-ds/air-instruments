@@ -1,8 +1,66 @@
 # HANDOFF
 
-Current state: **Stage 0.5 finished** (2026-11-23): hand tracking now runs in a Web Worker. Stage 0 (project, tracking core, debug panel, record/replay) is unchanged underneath. Next: the owner measures the new numbers on his laptop (see "Next step"), then Stage 1 (harp).
+Current state: **Stage 0.6 finished** (2026-11-23): tracking-speed test bench. Stage 0.5 (tracking in a Web Worker) stays; this stage adds diagnostics, a main-thread mode, test toggles, a one-click benchmark and a draw-only lag fix. **The real cause on the owner's laptop is NOT yet proven** (I cannot reproduce it, see below); the owner's numbers decide. Next: the owner sends numbers (see "Next step"), then Stage 1 (harp).
 
-## Stage 0.5 — what changed
+## Stage 0.6 — what changed
+
+1. **Diagnostics (panel lines "worker GL", "main GL", "env", "files", "mediapipe").** The worker probes its own scope at start (`src/core/diagnostics.ts`): OffscreenCanvas yes/no, WebGL2 yes/no, the GPU name (`WEBGL_debug_renderer_info`), "software renderer?", a strict context (`failIfMajorPerformanceCaveat`; refused = software), a second context with `powerPreference: high-performance`, WASM SIMD, threads, cores. The page does the same ("main GL") and the panel says whether both see the same GPU. MediaPipe's own console lines are captured and shown (it prints `gl_context.cc ... GL version` when the GPU delegate really got a GL context; "XNNPACK" is the CPU path). Also shown: model file + folder (`float16/1`), WASM file, what was fetched and how long it took.
+2. **Tracking mode switch (panel group "Tracking" -> "tracking mode"): `worker` or `main`.** `main` = MediaPipe on the main thread with the video element as input (the Stage 0 way). Worker code is kept. Delegate GPU/CPU works in both. Switching reloads the model (1-4 s); the unused backend is closed (worker terminated). The main-thread MediaPipe chunk is loaded only when main mode is used. Both modes feed the same pipeline (ids, smoothing, gestures), so instruments see no difference. **All speed settings are saved in localStorage** (`src/core/settings.ts`, key `air-instruments.speed.v1`: trackMode, delegate, workerInput, pickupOnFree, inferEvery, numHands, cameraRes, maxDpr, renderFpsCap, drawLeadEnabled; validated on load).
+3. **Test toggles** (live, saved): `worker input` bitmap|canvas (bitmap drawn to an OffscreenCanvas inside the worker first), `infer every Nth frame` 1-3, `numHands` 1|2, `camera size (test)` 640x480|320x240|1280x720 (reopens the camera), `render fps cap` (0 = off), `max pixel ratio` (existing). New buttons: **Reset numbers** (restart all averages; press it after changing a setting and wait ~15 s), **Run benchmark**, **Copy report** (copies all panel lines + benchmark as text).
+4. **Run benchmark** (`src/core/benchmark.ts`): pauses live tracking, loads MediaPipe on the MAIN thread (GPU, then CPU) and feeds the live camera 30 frames each as video element / ImageBitmap / OffscreenCanvas copy, then prints avg/p95 and "hands in x% of frames". It isolates the input path from the thread and the delegate on the owner's own hardware. Hands must be in view.
+5. **Draw-only lag fix (panel group "Draw lag fix", default ON).** The skeleton is drawn shifted forward by (now - camera capture time of the landmarks) using velocities, via `predictLandmarksInto` in `src/core/predict.ts` (palm velocity at wrist/knuckles, fingertip velocity at the tips, linear in between). Capped by `drawLeadMaxMs` 150 and `drawLeadMaxShift` 0.5 x handSize per joint (it cannot fly far when a hand stops). Instruments still get the unshifted `HandFrame`. It is only visible while "show hands" or the panel is on (the only place the skeleton is drawn). Unit-tested; the code path ran without errors in the browser, but I have NOT seen it with a real moving hand.
+6. Extra stats: render frame gap (avg/p95/max between drawn frames), camera frames "missed by the browser" (from `presentedFrames`; proves the main thread was blocked), "skipped by infer every", "worker busy", "% of each second the main thread spends inside MediaPipe" (main mode), the camera's real size/fps.
+7. Tests: 106 passing (new: settings, diagnostics helpers, benchmark helpers, `predictLandmarksInto`). Build passes. Worker, AudioWorklet and the main-thread MediaPipe chunk load in `npm run preview` (production): worker ready delegate GPU, worklet ok, main mode ready delegate GPU.
+
+## Speed investigation: what I measured, and what I could NOT
+
+**I cannot see the owner's camera or his GPU.** I ran in the Claude app's built-in browser (Chrome 152 engine) on a machine with an **Intel Iris Xe GPU, 12 cores**, with a "fake camera": a still photo of two hands (MediaPipe's own sample image `woman_hands.jpg`, slowly shifted sideways, 640x480). MediaPipe found hands in 100% of the frames. That window is throttled and partly hidden: render fps (2-27) and camera fps (4-17) there are **not meaningful**; only the inference ms are usable, and from only ~4-7 frames per second. Treat everything below as "what the code path does on an Intel laptop GPU", not as the owner's numbers.
+
+| Mode (my environment, hands in view) | inference avg / p95 (ms) | frame age avg (ms) | notes |
+|---|---|---|---|
+| WORKER, GPU, input bitmap (live) | 62-63 / 80-87 | 71-76 | first run had warm-up spikes up to 766 ms in the first frames |
+| WORKER, GPU, input canvas | 67 / 114 | 77 | no gain over bitmap |
+| MAIN, GPU, video element (live) | 48 / 62 | 49 | blocks the main thread |
+| Benchmark: main GPU, video element | 46.4 / 60.0 | - | |
+| Benchmark: main GPU, ImageBitmap | 45.1 / 56.7 | - | +0.7 ms to create the bitmap |
+| Benchmark: main GPU, OffscreenCanvas copy | 47.7 / 61.2 | - | +0.7 ms |
+| Benchmark: main CPU, video element | 64.5 / 77.6 | - | |
+| Benchmark: main CPU, ImageBitmap | 63.9 / 82.8 | - | |
+| Benchmark: main CPU, OffscreenCanvas copy | 62.9 / 78.2 | - | |
+
+What this shows (and what it does not):
+- **Input type is NOT the cause here**: video element, ImageBitmap and canvas copy are within noise on the same GPU. "ImageBitmap forces a slow upload path" is not supported by my data (it could still differ on the owner's driver: the benchmark button tests exactly this on his machine).
+- **The worker's WebGL really is the GPU here**: worker GL = main GL = Intel Iris Xe, software: no, strict context OK, and MediaPipe logs `gl_context.cc: GL version 3.0 ... WebGL 2.0` inside the worker. So on this machine the GPU delegate is NOT silently falling back to a software path in the worker. **The owner's hypothesis (silent fallback in the worker) is not reproduced here.** Whether it happens on his laptop is what the "worker GL" line will tell: SwiftShader / Microsoft Basic Render Driver / "strict context REFUSED" / a different GPU than "main GL" would be the cause.
+- **The worker costs ~15-20 ms more than main here (62-67 vs 46-48)**, not 65 ms (his 105 vs 40). I could not separate the reasons. The candidate I could not test: GPU contention (the page rendering at 60 fps uses the same GPU as MediaPipe in the worker); my window cannot render at 60 fps. On his laptop the test is: `render fps cap` 30, or `max pixel ratio` 1, **Reset numbers**, wait 15 s; if worker inference avg drops, contention is the cause.
+- **CPU vs GPU**: GPU 46 vs CPU 64 ms on the main thread here: with hands in view the gap is smaller than the 2.5-3x I saw in Stage 0.5 without hands. The owner's CPU worker 100 ms vs GPU worker 105 ms (almost equal) is consistent with "the GPU is not helping inside his worker".
+- **Why render was 12 fps on the main thread (his old numbers)**: arithmetic: 26-29 tracking fps x 38-40 ms = 100-110% of every second inside `detectForVideo`, which blocks the main thread; rendering only gets the gaps. A ~40 ms blocking call can never leave room for 60 fps (16.7 ms frames). `infer every 2` halves the blocking (~55-60% busy) and should lift render to roughly 25-30 fps, not 60: **main mode cannot give 60 fps render with a 40 ms blocking inference, by construction.** The panel shows "main thread inside MediaPipe: X%", "missed by the browser" and the render gap p95/max in main mode, which prove this on his machine. GPU contention and the synchronous readback inside `detectForVideo` are part of the 38 ms and cannot be moved out of the main thread in this mode.
+- **Other causes checked**:
+  - Model: only one bundle exists (float16/1), no lite/full option (checked in Stage 0.5).
+  - Options: `numHands` 2 (now a toggle), confidence 0.5/0.5/0.5 (constants, unchanged: lower presence/tracking thresholds would only make the expensive palm detector run less often). MediaPipe resizes the input to its own small tensors whatever the camera size, so camera size mostly changes only the upload cost. 640x480 -> 320x240 works (camera reopens), but on my fake camera the numbers were too noisy to claim an effect.
+  - `self.import` + indirect `eval` shim: it only changes how the loader script starts; the WASM is compiled and run by the browser as usual. Worker and main inference are within ~15 ms of each other here, so the shim does not force a slow path. (I could not run the worker without it: a module worker cannot load MediaPipe without it.)
+  - SIMD yes. Threads: no (no cross-origin isolation), but the `@mediapipe/tasks-vision@1.2.3` WASM in `node_modules` is a single build with no pthread worker file, so threads would not be used even if available. The CPU delegate is single-thread XNNPACK.
+  - WebGPU exists in the browser but this MediaPipe version has no WebGPU delegate for hand tracking.
+- Load: model fetch ~3 s on first load (7.8 MB), WASM 70 ms (cached), total load 3.4-3.8 s.
+
+## Recommended default (provisional)
+
+Evidence I have: main mode has lower inference and lower frame age (49 vs 71-76 ms here; 38-40 ms vs 105 ms on the owner's laptop) but blocks rendering (his 12 fps). Worker mode keeps render smooth but on his laptop the model is 2.5x slower for a reason I could not reproduce. **I leave the default at worker + GPU (unchanged from Stage 0.5) because I have no number from the owner's laptop that justifies a change.** The switch is saved in localStorage, so once the owner picks the best row from his numbers it stays on his machine; the repository default should then change to that row (one line in `DEFAULT_CONFIG`).
+
+Options if the worker stays slow on his laptop (not built; each needs the owner's OK because it changes visuals or the render path):
+1. **Video as a real `<video>` element under a transparent canvas** (the compositor draws/dims/mirrors it, the canvas only draws effects). Removes the full-screen video draw from the canvas GPU work. Touches the Stage 6 "record canvas" plan and the additive-glow look. Worth it only if the render fps cap / pixel ratio tests show contention.
+2. **`infer every 2` in main mode + the draw lag fix**: tracking 15 fps, render ~25-30 fps.
+3. **Prediction for the instruments** (`predictedTip`, Stage 1) to hide frame age for the harp.
+
+## Known issues added in 0.6
+
+- "Frame age" has no camera delay in it if the browser gives no capture time (the panel warns).
+- If GPU fails at load or on a real frame the app drops to CPU and **saves "CPU" to localStorage** (the panel setting switches to CPU). Switch back to GPU in the panel if it was a one-off.
+- Camera size toggle is a test: very low resolutions can lose small or far hands.
+- The draw lag fix and the render fps cap have not been seen with a real camera in a real 60 fps window.
+- The benchmark loads two more MediaPipe instances while the worker's one stays loaded (more GPU memory for ~25 s).
+- `.claude/launch.json` (dev/preview servers for the Claude app) is local only (listed in `.git/info/exclude`), not committed.
+
+## Stage 0.5 — what changed (still true)
 
 1. **Tracking runs in a module Web Worker.** `src/core/trackerWorker.ts` (built by Vite as a separate `dist/assets/trackerWorker-*.js`, ES module worker, `worker.format: "es"` in `vite.config.ts`). It owns MediaPipe `HandLandmarker`.
    - Main thread (`HandTracker` in `src/core/tracking.ts`) keeps the camera and the `requestVideoFrameCallback` loop. For each new camera frame it does `createImageBitmap(video)` and **transfers** the bitmap to the worker (zero-copy). The worker answers with the landmarks (a small `Float32Array`, transferred) and its own measured inference time.
@@ -76,21 +134,25 @@ A bigger change I did **not** make (it touches the Stage 6 "record canvas" plan)
 
 ## Next step (exact)
 
-1. **Owner runs the app on his laptop with both hands in view** (instructions were given in chat), opens the debug panel (D) and sends back these numbers:
-   - `render` fps
-   - `inference` avg and p95 (this is the number measured inside the worker)
-   - `frame age` avg and p95, and whether the "no capture time" warning shows
-   - `tracking` fps and the "% not sent"
-   - the same with the delegate switched to **CPU**, and with **grab newest when free** unticked, if he has time
-   - and, if the render fps is still low, the same render fps with **max pixel ratio** set to 1
-   - good config via **Copy config**
-2. Agent decides from those numbers: inference above 25 ms in the worker is acceptable now (it no longer blocks rendering) but frame age is what the player feels; if frame age avg is above ~100 ms, look at camera resolution and `numHands` next.
-3. Then **Stage 1: Harp** (strings, pluck detection, Karplus-Strong worklet in `src/audio/worklets/ks-string.ts` loaded with `?worker&url`, scales). Add render-side interpolation of hand positions and use `predictedTip` for pluck detection (off until the owner turns it on).
+1. **Owner runs the app on his laptop with both hands in view**, presses **D**, and for EACH of these settings (switch in the panel, press **Reset numbers**, wait ~15 s, press **Copy report**, paste to the agent):
+   - A: tracking mode **worker**, delegate **GPU** (the default)
+   - B: **worker**, **GPU**, **render fps cap 30** (tests GPU contention)
+   - C: tracking mode **main**, delegate **GPU**
+   - D: **main**, **GPU**, **infer every 2**
+   Numbers wanted per setting: render fps, tracking fps, inference avg/p95, frame age avg/p95 and the **"worker GL" line** (the "main GL" and "same GPU" lines once).
+2. Then press **Run benchmark** once (hands in view, ~25 s) and paste the benchmark block too.
+3. Agent decides from those numbers: change `DEFAULT_CONFIG` (trackMode / delegate / renderFpsCap) and/or build option 1 (video element layer) if B is much faster than A.
+4. Then **Stage 1: Harp** (strings, pluck detection, Karplus-Strong worklet in `src/audio/worklets/ks-string.ts` loaded with `?worker&url`, scales; add render-side interpolation; use `predictedTip` for pluck detection).
 
 ## Tunables the owner should test (debug panel, key D)
 
 | Tunable | Default | What to try |
 |---|---|---|
+| `tracking mode` | worker | worker vs main: compare frame age and render fps. |
+| `render fps cap` | 0 | 30 or 15: if worker inference drops, the GPU is shared with rendering. |
+| `infer every Nth frame` | 1 | 2 in main mode gives rendering room. |
+| `worker input` | bitmap | canvas: a different upload path (no gain in my tests). |
+| `draw skeleton ahead` | on | With show hands on: does the skeleton stay on the moving hand? Overshoot when stopping: lower max shift. |
 | `delegate` | GPU | Switch to CPU and compare inference avg/p95 and frame age. Keep the faster one that still tracks well. |
 | `grab newest when free` | on | Untick and compare tracking fps and frame age. |
 | `max pixel ratio` | 2 | If render fps is low, set 1 or 1.25 and see if it jumps. |

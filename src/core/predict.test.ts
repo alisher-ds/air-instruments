@@ -3,7 +3,8 @@ import { synthHand } from "../../test/helpers/synthHand";
 import { TIP_INDICES } from "../config";
 import type { Hand } from "../instruments/Instrument";
 import { HandAnalyzer } from "./gestures";
-import { extrapolate, predictedTip, type PredictConfig } from "./predict";
+import type { Vec2 } from "../instruments/Instrument";
+import { extrapolate, jointFinger, predictLandmarksInto, predictedTip, type PredictConfig } from "./predict";
 
 describe("extrapolate", () => {
   it("moves the point by velocity * lead", () => {
@@ -76,5 +77,64 @@ describe("predictedTip", () => {
   it("works for every finger index", () => {
     const hand = movingHand();
     for (let i = 0; i < TIP_INDICES.length; i++) expect(predictedTip(hand, i, on).x).toBeGreaterThan(hand.tips[i]!.x);
+  });
+});
+
+describe("predictLandmarksInto (drawing only)", () => {
+  function movingHand(): Hand {
+    const an = new HandAnalyzer({ pinchOn: 0.25, pinchOff: 0.35, velocityAlpha: 1, curlFullBendRad: 2.2, sideDeadZone: 0.03 });
+    const at = (dx: number) => synthHand({ x: 600 + dx, y: 500, scale: 1 });
+    an.analyze([{ id: 1, landmarks: at(0) }], 0, 1280);
+    return an.analyze([{ id: 1, landmarks: at(10) }], 33, 1280).hands[0]!; // all points ~303 px/s to the right
+  }
+
+  it("maps landmarks to fingers", () => {
+    expect(jointFinger(0)).toBeNull();
+    expect(jointFinger(1)).toEqual({ finger: 0, along: 0 });
+    expect(jointFinger(4)).toEqual({ finger: 0, along: 1 });
+    expect(jointFinger(8)).toEqual({ finger: 1, along: 1 });
+    expect(jointFinger(20)).toEqual({ finger: 4, along: 1 });
+  });
+
+  it("moves every joint ahead by velocity * lead when the whole hand moves", () => {
+    const hand = movingHand();
+    const out: Vec2[] = [];
+    predictLandmarksInto(out, hand, 100, 1000);
+    expect(out).toHaveLength(21);
+    const expected = (hand.palmVelocity.x * 100) / 1000;
+    expect(expected).toBeGreaterThan(20);
+    for (let i = 0; i < 21; i++) {
+      expect(out[i]!.x - hand.landmarks[i]!.x).toBeGreaterThan(expected * 0.8);
+      expect(out[i]!.x - hand.landmarks[i]!.x).toBeLessThan(expected * 1.2);
+    }
+  });
+
+  it("the fingertip uses its own velocity, the wrist the palm velocity", () => {
+    const hand = movingHand();
+    const custom: Hand = { ...hand, tipVelocity: hand.tipVelocity.map(() => ({ x: 0, y: 0 })), palmVelocity: { x: 500, y: 0 } };
+    const out: Vec2[] = [];
+    predictLandmarksInto(out, custom, 100, 1000);
+    expect(out[0]!.x - custom.landmarks[0]!.x).toBeCloseTo(50, 5); // wrist: palm velocity
+    expect(out[8]!.x - custom.landmarks[8]!.x).toBeCloseTo(0, 5); // index tip: its own (zero) velocity
+    expect(out[6]!.x - custom.landmarks[6]!.x).toBeCloseTo(50 * (2 / 3), 5); // PIP: one third of the way to the tip
+  });
+
+  it("never shifts a joint further than maxShift (no big overshoot)", () => {
+    const hand = movingHand();
+    const out: Vec2[] = [];
+    predictLandmarksInto(out, hand, 300, 5);
+    for (let i = 0; i < 21; i++) {
+      expect(Math.hypot(out[i]!.x - hand.landmarks[i]!.x, out[i]!.y - hand.landmarks[i]!.y)).toBeLessThanOrEqual(5 + 1e-9);
+    }
+  });
+
+  it("zero lead gives the measured positions, and the output array is reused", () => {
+    const hand = movingHand();
+    const out: Vec2[] = [];
+    predictLandmarksInto(out, hand, 0, 100);
+    hand.landmarks.forEach((p, i) => expect(out[i]).toEqual(p));
+    const first = out[3];
+    predictLandmarksInto(out, hand, 50, 100);
+    expect(out[3]).toBe(first); // same object, no allocation
   });
 });

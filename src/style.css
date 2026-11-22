@@ -239,7 +239,7 @@ canvas#stage {
   position: absolute;
   top: 14px;
   right: 14px;
-  width: min(460px, calc(100vw - 28px));
+  width: min(640px, calc(100vw - 28px));
   max-height: calc(100vh - 28px);
   overflow-y: auto;
   padding: 12px;
@@ -262,6 +262,14 @@ canvas#stage {
   margin: 0 0 8px;
   white-space: pre-wrap;
   color: #cfd6e6;
+}
+
+.dbg-bench:empty {
+  display: none;
+}
+
+.dbg-bench {
+  color: #ffd98a;
 }
 
 .dbg-hand {
