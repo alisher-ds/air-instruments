@@ -30,7 +30,8 @@ Quality bar: it must feel like a real instrument, not a tech demo. A non-technic
 src/
   main.ts                 // boot, permissions, main loop
   core/
-    tracking.ts           // HandLandmarker wrapper → HandFrame
+    tracking.ts           // camera + frame loop (main thread), sends frames to the worker, ids/smoothing → HandFrame
+    trackerWorker.ts      // Web Worker that owns MediaPipe HandLandmarker (inference never blocks rendering)
     smoothing.ts          // One Euro filter per landmark
     gestures.ts           // pinch (with hysteresis), velocities, palm center
     geometry.ts           // segment intersection, distances (pure, tested)
@@ -40,7 +41,7 @@ src/
     scales.ts             // musical scales & note mapping (pure, tested)
     worklets/ks-string.ts // Karplus-Strong AudioWorklet processor
   render/
-    renderer.ts           // canvas setup, mirrored video, layers
+    renderer.ts           // transparent effects canvas (render scale), mirrored camera <video> layer under it (CSS)
     effects.ts            // glow, particles, trails (pooled, no GC churn)
     handOverlay.ts        // optional hand skeleton
   instruments/
@@ -98,9 +99,10 @@ Rule: all gesture thresholds are expressed **relative to `handSize`**, never in 
   - in-app "landmarks received → sound scheduled" < 5 ms;
   - inference < 25 ms per frame (GPU);
   - end-to-end as low as possible via: camera at 640×480 (not HD), `latencyHint: "interactive"`, sounds triggered inside `update`, and **predictive triggering** — extrapolate the fingertip ~1 frame ahead using velocity so fast strikes fire earlier (tunable, can be turned off).
-- **Tracking loop:** call `detectForVideo` once per NEW camera frame (use `requestVideoFrameCallback` when available), not on every `requestAnimationFrame`. Rendering runs at display rate and interpolates hand positions between tracking frames.
-- **Performance target:** 60 FPS render on a mid-range laptop. Particle systems use object pools. Canvas sized with devicePixelRatio (capped at 2). Pause tracking and audio when the tab is hidden.
-- **Known risk:** inference runs on the main thread and can cause frame drops. If Stage 0 measures > 25 ms inference, move tracking into a Web Worker (decision made in Stage 0, recorded in HANDOFF.md).
+- **Tracking loop:** MediaPipe runs in a **Web Worker** (`trackerWorker.ts`; decided in Stage 0.5 because main-thread inference blocked rendering). The main thread owns the camera: once per NEW camera frame (`requestVideoFrameCallback` when available, not every `requestAnimationFrame`) it grabs an `ImageBitmap`, transfers it to the worker, and gets landmarks back. **At most one frame in flight**; if the worker is busy the camera frame is dropped (no queue). Rendering runs at display rate and never waits for tracking; it interpolates/predicts hand positions between tracking frames.
+- **Performance target:** 60 FPS render on a mid-range laptop. Particle systems use object pools. Canvas sized with devicePixelRatio (capped at 2) × render scale (see the rule below). Pause tracking and audio when the tab is hidden.
+- **Render must stay cheap (measured, Stage 0.7):** the render and MediaPipe share one GPU. On the owner's Intel Iris Xe laptop (1920×970 canvas, worker GL = the same GPU, not software) inference averaged ~102 ms with the render uncapped at 60 fps (tracking 10 fps, frame age ~128 ms), but ~62 ms (p95 80, tracking 14 fps, frame age ~96 ms) with the render capped at 20 fps, and ~38 ms with the old main-thread tracking while render ran at ~12 fps. So every GPU millisecond the render uses is taken from tracking. Target on that laptop: inference avg ≤ 45 ms and frame age avg ≤ 70 ms with the render at 60 fps (or a stable 30). **Rule: render must stay cheap; heavy effects are drawn at a reduced internal resolution.** Concretely: (1) the camera picture is a normal mirrored `<video>` element under a transparent canvas (CSS mirror, `object-fit` = same mapping as `fitTransform`, dim by CSS opacity), never drawn into the canvas every frame; (2) the effects canvas has a *render scale* (0.5 / 0.75 / 1.0 of the screen's pixel ratio) and is upscaled by CSS, while thin sharp things (the hand skeleton) use a separate full-resolution canvas only while visible; (3) glow = layered strokes and pre-rendered sprites, no `shadowBlur`; (4) any new full-screen effect must be checked with the debug panel's "Compare render settings" before it is kept.
+- **Known risk (remaining):** GPU contention between rendering and MediaPipe (see above), not main-thread blocking. Worker loading needs a page without a strict CSP (the `self.import` shim in `trackerWorker.ts`).
 - **Debug panel** (toggle with `D`): FPS, tracking ms, estimated audio latency, hand skeletons, pinch values, active thresholds.
 - **Tunables:** all magic numbers live in one `config.ts`, adjustable live from the debug panel. "Copy config" button exports current values as JSON so the owner can paste good settings back to the agent.
 - **Record & replay (critical for agents):** agents cannot see the owner's camera. In the debug panel, `R` records the smoothed `HandFrame` stream to a JSON file (landmarks only, no video). Gesture logic (pinch, pluck, hit, press) must be testable by replaying these recordings in Vitest. The owner records short clips of real playing and puts them in `test/recordings/`; bugs are reproduced and fixed against them.

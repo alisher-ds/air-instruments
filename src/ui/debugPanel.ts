@@ -10,7 +10,18 @@ import { el } from "./dom";
 export interface DebugInfo {
   renderFps: number;
   /** JS time of one render tick (whole rAF callback) and of its video-draw part. Rolling summary. */
-  render: { jsAvgMs: number; jsP95Ms: number; jsMaxMs: number; videoDrawAvgMs: number; dpr: number };
+  render: {
+    jsAvgMs: number;
+    jsP95Ms: number;
+    jsMaxMs: number;
+    /** Canvas clear (element mode) or video draw (canvas mode), JS time. */
+    videoDrawAvgMs: number;
+    /** Backing pixels per CSS pixel of the effects canvas (screen ratio x render scale). */
+    dpr: number;
+    /** "video element | scale 1 | 2D GPU ..." and the backing store size "1920x970". */
+    mode: string;
+    backing: string;
+  };
   /** Time between two drawn frames (ms). A long max = something blocked the main thread. */
   renderGap: { avgMs: number; p95Ms: number; maxMs: number };
   /** How far ahead the skeleton is drawn right now (ms), 0 = off. */
@@ -38,6 +49,10 @@ export interface DebugActions {
   resetNumbers(): void;
   /** Pauses tracking, measures the main-thread paths (see core/benchmark.ts), resumes. Resolves with the report lines. */
   runBenchmark(log: (text: string) => void): Promise<string[]>;
+  /** "Compare render settings": runs the render cases with hands in view (see core/renderBench.ts). Resolves with the report lines. */
+  runCompare(): Promise<string[]>;
+  /** Ends a running comparison early. */
+  stopCompare(): void;
 }
 
 type ConfigBag = Record<string, number | boolean | string>;
@@ -69,7 +84,11 @@ export class DebugPanel {
   private readonly reportButton: HTMLButtonElement;
   private readonly benchButton: HTMLButtonElement;
   private readonly bench: HTMLElement;
+  private readonly compareButton: HTMLButtonElement;
+  private readonly compare: HTMLElement;
   private benchLines: string[] = [];
+  private compareLines: string[] = [];
+  private comparing = false;
   private lastReport = "";
   private readonly refreshers: Array<() => void> = [];
   private copyTimer = 0;
@@ -100,6 +119,13 @@ export class DebugPanel {
       title: "Keep your hands in view. Takes 15-25 s, tracking pauses meanwhile.",
       onclick: () => void this.runBenchmark(),
     });
+    this.compare = el("pre", { class: "dbg-stats dbg-bench" });
+    this.compareButton = el("button", {
+      class: "btn btn-small btn-accent",
+      textContent: "Compare render settings",
+      title: "Keep BOTH hands in front of the camera for about 1.5 minutes. Tries 6 render setups, 10 s each, and prints a table.",
+      onclick: () => void this.runCompare(),
+    });
     const resetNumbers = el("button", {
       class: "btn btn-small",
       textContent: "Reset numbers",
@@ -123,7 +149,8 @@ export class DebugPanel {
       el("div", { class: "dbg-title", textContent: "Debug (D to hide)" }),
       this.stats,
       this.hands,
-      el("div", { class: "dbg-buttons" }, this.reportButton, resetNumbers, this.benchButton, this.recButton, beep, this.copyButton, reset),
+      el("div", { class: "dbg-buttons" }, this.compareButton, this.reportButton, resetNumbers, this.benchButton, this.recButton, beep, this.copyButton, reset),
+      this.compare,
       this.bench,
       this.buildTunables(),
     );
@@ -150,8 +177,9 @@ export class DebugPanel {
     const r = info.render;
     const g = info.renderGap;
     lines.push(
-      `render      ${f(info.renderFps, 0)} fps   canvas ${info.canvas.width}x${info.canvas.height} @${f(r.dpr, 2)}x   JS ${f(r.jsAvgMs, 2)} ms avg | p95 ${f(r.jsP95Ms, 2)} | max ${f(r.jsMaxMs, 1)}  (video draw ${f(r.videoDrawAvgMs, 2)})`,
+      `render      ${f(info.renderFps, 0)} fps   window ${info.canvas.width}x${info.canvas.height} css px, effects canvas ${r.backing} px (@${f(r.dpr, 2)}x)   JS ${f(r.jsAvgMs, 2)} ms avg | p95 ${f(r.jsP95Ms, 2)} | max ${f(r.jsMaxMs, 1)}  (${config.videoMode === "canvas" ? "video draw" : "clear"} ${f(r.videoDrawAvgMs, 2)})`,
     );
+    lines.push(`  layers    ${r.mode}`);
     lines.push(
       `  gap       between drawn frames: avg ${f(g.avgMs)} ms | p95 ${f(g.p95Ms)} | max ${f(g.maxMs)}${config.renderFpsCap > 0 ? `   (render cap ${config.renderFpsCap} fps)` : ""}`,
     );
@@ -274,6 +302,26 @@ export class DebugPanel {
     this.benchButton.disabled = false;
   }
 
+  private async runCompare(): Promise<void> {
+    if (this.comparing) {
+      this.actions.stopCompare(); // the same button stops a running comparison
+      return;
+    }
+    this.comparing = true;
+    this.compareButton.textContent = "Stop comparing";
+    this.benchButton.disabled = true;
+    this.compare.textContent = "Comparing render settings. Keep BOTH hands visible and move them a little...";
+    try {
+      this.compareLines = await this.actions.runCompare();
+    } catch (e) {
+      this.compareLines = [`Compare failed: ${e instanceof Error ? e.message : String(e)}`];
+    }
+    this.compare.textContent = this.compareLines.join("\n");
+    this.compareButton.textContent = "Compare render settings";
+    this.benchButton.disabled = false;
+    this.comparing = false;
+  }
+
   private buildTunables(): HTMLElement {
     const wrap = el("div", { class: "dbg-tunables" });
     const cfg = config as unknown as ConfigBag;
@@ -364,7 +412,11 @@ export class DebugPanel {
   }
 
   private async copyReport(): Promise<void> {
-    const text = [this.lastReport, ...(this.benchLines.length > 1 ? ["", ...this.benchLines] : [])].join("\n");
+    const text = [
+      this.lastReport,
+      ...(this.compareLines.length > 1 ? ["", ...this.compareLines] : []),
+      ...(this.benchLines.length > 1 ? ["", ...this.benchLines] : []),
+    ].join("\n");
     const ok = await this.copyText(text);
     this.reportButton.textContent = ok ? "Copied!" : "Copy failed (see console)";
     window.clearTimeout(this.reportTimer);

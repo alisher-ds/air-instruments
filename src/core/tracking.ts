@@ -177,6 +177,17 @@ export class TrackingError extends Error {
   }
 }
 
+/** Raw numbers of one tracking result. */
+export interface TrackSample {
+  /** performance.now() when the result reached the main thread. */
+  arrival: number;
+  inferenceMs: number;
+  /** Camera capture -> landmarks ready. */
+  frameAgeMs: number;
+  /** How many hands were found (0 = nobody in view). */
+  hands: number;
+}
+
 /** State of the tracking backend (the worker, or the main-thread landmarker). */
 export type WorkerState = "not-started" | "loading" | "ready" | "failed";
 export type TrackMode = "worker" | "main";
@@ -261,6 +272,8 @@ export class HandTracker {
   onError: (err: TrackingError) => void = () => {};
   /** Called when the delegate that is really running differs from the one asked for (GPU -> CPU fallback). */
   onDelegateChange: (delegate: DelegateName) => void = () => {};
+  /** One call per tracking result with its raw numbers (used by the render-settings comparison, which needs per-frame data). */
+  onSample: (sample: TrackSample) => void = () => {};
   /** Camera capture time (performance.now clock) of the frame behind the latest onFrame. Used to draw ahead by the frame age. */
   lastCaptureTime = 0;
 
@@ -326,8 +339,9 @@ export class HandTracker {
     v.muted = true;
     v.playsInline = true;
     v.autoplay = true;
-    // Kept in the page (but invisible) so the browser keeps decoding frames reliably.
-    v.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;";
+    // Kept in the page so the browser keeps decoding frames reliably. style.css: invisible by default ("cam"), and the
+    // renderer turns it into the visible mirrored camera layer ("layer") when videoMode is "element".
+    v.className = "cam";
     document.body.appendChild(v);
     this.video = v;
     this.hasRvfc = "requestVideoFrameCallback" in v;
@@ -866,6 +880,7 @@ export class HandTracker {
     }
     this.lastResultAt = d.arrival;
     this.lastCaptureTime = d.captureTime;
+    this.onSample({ arrival: d.arrival, inferenceMs: d.inferenceMs, frameAgeMs: d.arrival - d.captureTime, hands: d.hands.length });
 
     this.onFrame(this.pipeline.process(d.hands, d.arrival));
   }

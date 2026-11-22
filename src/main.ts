@@ -9,6 +9,7 @@ import { config } from "./config";
 import { runBenchmark } from "./core/benchmark";
 import { MainLoop } from "./core/loop";
 import { Recorder, recordingFileName } from "./core/recording";
+import { CaseCollector, formatCompareTable, runRenderCompare, type CompareRow } from "./core/renderBench";
 import { RollingStats } from "./core/rollingStats";
 import { loadSavedSettings, saveSettings } from "./core/settings";
 import { HandTracker, TrackingError, type TrackingErrorKind } from "./core/tracking";
@@ -17,6 +18,8 @@ import type { HandFrame, Instrument } from "./instruments/Instrument";
 import { Effects } from "./render/effects";
 import { drawHands, type DrawLead } from "./render/handOverlay";
 import { Renderer } from "./render/renderer";
+import { TestLoad } from "./render/testLoad";
+import { Banner } from "./ui/banner";
 import { DebugPanel } from "./ui/debugPanel";
 import { Hud } from "./ui/hud";
 import { StartScreen } from "./ui/startScreen";
@@ -29,6 +32,8 @@ const ui = document.getElementById("ui") as HTMLElement;
 
 const renderer = new Renderer(canvas);
 const fx = new Effects();
+const testLoad = new TestLoad();
+const banner = new Banner(ui);
 const tracker = new HandTracker();
 const recorder = new Recorder();
 const instruments = createInstruments();
@@ -67,7 +72,80 @@ const debug = new DebugPanel(ui, {
       tracker.resume();
     }
   },
+  runCompare: () => runCompare(),
+  stopCompare: () => {
+    compareAbort = true;
+  },
 });
+
+// --- "Compare render settings" ---------------------------------------------
+
+/** While set, tracking results and drawn-frame gaps are copied into it (one collector per case). */
+let compareCollector: CaseCollector | null = null;
+let compareRunning = false;
+let compareAbort = false;
+let handsNow = 0;
+
+tracker.onSample = (s) => {
+  handsNow = s.hands;
+  compareCollector?.pushTrack(s);
+};
+
+/**
+ * Switches the render settings case by case (live, nothing is saved), collects ~10 s of numbers with hands in view, then
+ * puts every setting back. The skeleton is not drawn meanwhile (it is off in normal use), and a synthetic harp-like
+ * effects load is on, because with no instrument the canvas would otherwise have nothing to draw.
+ */
+async function runCompare(): Promise<string[]> {
+  if (compareRunning) return ["Already running."];
+  const keep = {
+    videoMode: config.videoMode,
+    renderScale: config.renderScale,
+    renderFpsCap: config.renderFpsCap,
+    software2d: config.software2d,
+    testLoad: config.testLoad,
+  };
+  compareRunning = true;
+  compareAbort = false;
+  config.testLoad = true;
+  // The panel covers part of the picture: hide it while the owner stands back with his hands up, show it again for the table.
+  const panelWasOpen = debug.visible;
+  if (panelWasOpen) debug.toggle();
+  let rows: CompareRow[] = [];
+  try {
+    rows = await runRenderCompare({
+      now: () => performance.now(),
+      sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+      apply: (s) => {
+        config.videoMode = s.videoMode;
+        config.renderScale = s.renderScale;
+        config.renderFpsCap = s.renderFpsCap;
+        config.software2d = s.software2d;
+        lastDraw = 0; // do not count the gap that the switch itself caused
+      },
+      setCollector: (c) => {
+        compareCollector = c;
+      },
+      show: (title, detail) => banner.show(title, detail),
+      handsNow: () => handsNow,
+      aborted: () => compareAbort,
+    });
+  } finally {
+    compareCollector = null;
+    compareRunning = false;
+    Object.assign(config, keep);
+    banner.hide();
+    if (panelWasOpen && !debug.visible) debug.toggle();
+    debug.syncTunables();
+    tracker.resetStats();
+  }
+  const st = tracker.getStats();
+  const header = [
+    `Compare render settings${compareAbort ? " (STOPPED EARLY)" : ""}: hands in view, only samples with a hand count.`,
+    `window ${renderer.width}x${renderer.height} css px, screen pixel ratio ${renderer.screenDpr.toFixed(2)} | tracking ${st.mode} ${st.delegate} | synthetic effects load ON (harp-like glow), skeleton hidden`,
+  ];
+  return [...header, ...formatCompareTable(rows)];
+}
 
 // --- instruments ---------------------------------------------------------
 
@@ -149,13 +227,18 @@ const loop = new MainLoop((_dt, now) => {
     const t0 = performance.now();
     renderer.beginFrame(tracker.video);
     videoDraw.push(renderer.lastBeginMs);
-    const { ctx } = renderer;
+    const { ctx } = renderer; // read fresh every frame: the renderer replaces its context when the 2D mode changes
     current?.render(ctx, fx);
-    if (latestFrame && (config.showHands || debug.visible)) drawHands(ctx, latestFrame, currentDrawLead(performance.now()));
+    if (config.testLoad) testLoad.draw(ctx, now, renderer.width, renderer.height);
+    // At render scale 1 the skeleton goes into the same canvas; below 1 into a small sharp canvas of its own.
+    const skeleton = latestFrame !== null && !compareRunning && (config.showHands || debug.visible);
+    const skeletonCtx = renderer.overlayContext(skeleton);
+    if (skeletonCtx && latestFrame) drawHands(skeletonCtx, latestFrame, currentDrawLead(performance.now()));
     renderJs.push(performance.now() - t0);
     if (lastDraw > 0) {
       const gap = now - lastDraw;
       renderGap.push(gap);
+      compareCollector?.pushDraw(gap);
       if (gap > 0) drawFps = drawFps === 0 ? 1000 / gap : drawFps * 0.95 + (1000 / gap) * 0.05;
     }
     lastDraw = now;
@@ -175,6 +258,8 @@ const loop = new MainLoop((_dt, now) => {
         jsMaxMs: js.max,
         videoDrawAvgMs: videoDraw.summary().avg,
         dpr: renderer.dpr,
+        mode: renderer.describe(),
+        backing: `${renderer.backingWidth}x${renderer.backingHeight}`,
       },
       renderGap: { avgMs: gaps.avg, p95Ms: gaps.p95, maxMs: gaps.max },
       drawLeadMs,

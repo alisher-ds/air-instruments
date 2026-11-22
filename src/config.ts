@@ -72,8 +72,20 @@ export interface Config {
   videoDim: number;
   showHands: boolean;
   videoFit: "cover" | "contain";
+  /**
+   * How the camera picture reaches the screen. "element" = a normal mirrored <video> under a transparent canvas (the
+   * browser's compositor does the work; the canvas draws only effects). "canvas" = the Stage 0 way: the video is drawn
+   * into the canvas every frame (kept only so the benchmark can compare).
+   */
+  videoMode: "element" | "canvas";
   /** Upper limit for devicePixelRatio (hard cap 2). Lower = fewer pixels to fill = faster render. */
   maxDpr: number;
+  /** Internal resolution of the effects canvas as a fraction of the screen's (0.5, 0.75, 1). CSS upscales it to the full window. */
+  renderScale: number;
+  /** TEST: create the 2D context with willReadFrequently (software, CPU-drawn) to see if it frees the GPU for MediaPipe. */
+  software2d: boolean;
+  /** TEST: draw a synthetic "harp-like" load (additive glow strokes + sprites) so render settings can be compared before the harp exists. */
+  testLoad: boolean;
   /** Draw at most this many frames per second (0 = every display frame). A speed TEST: does less GPU work for render help inference? */
   renderFpsCap: number;
 
@@ -115,7 +127,11 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   videoDim: 0.5,
   showHands: false,
   videoFit: "cover",
+  videoMode: "element",
   maxDpr: 2,
+  renderScale: 0.75,
+  software2d: false,
+  testLoad: false,
   renderFpsCap: 0,
 
   recordMaxSeconds: 60,
@@ -173,8 +189,12 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "View", key: "videoDim", label: "video dim", min: 0, max: 1, step: 0.05 },
   { kind: "boolean", group: "View", key: "showHands", label: "show hands" },
   { kind: "choice", group: "View", key: "videoFit", label: "video fit", options: ["cover", "contain"] },
+  { kind: "choice", group: "View", key: "videoMode", label: "video layer", options: ["element", "canvas"] },
   { kind: "number", group: "View", key: "maxDpr", label: "max pixel ratio", min: 1, max: 2, step: 0.25 },
+  { kind: "number", group: "View", key: "renderScale", label: "render scale (0.5 / 0.75 / 1)", min: 0.5, max: 1, step: 0.25 },
   { kind: "number", group: "View", key: "renderFpsCap", label: "render fps cap (0 = off)", min: 0, max: 60, step: 5 },
+  { kind: "boolean", group: "View", key: "software2d", label: "2D canvas in software (test)" },
+  { kind: "boolean", group: "View", key: "testLoad", label: "synthetic effects load (test)" },
   { kind: "boolean", group: "Draw lag fix", key: "drawLeadEnabled", label: "draw skeleton ahead (by frame age)" },
   { kind: "number", group: "Draw lag fix", key: "drawLeadMaxMs", label: "max lead (ms)", min: 0, max: 300, step: 10 },
   { kind: "number", group: "Draw lag fix", key: "drawLeadMaxShift", label: "max shift (x handSize)", min: 0.05, max: 1.5, step: 0.05 },

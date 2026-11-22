@@ -1,6 +1,28 @@
 # HANDOFF
 
-Current state: **Stage 0.6 finished** (2026-11-23): tracking-speed test bench. Stage 0.5 (tracking in a Web Worker) stays; this stage adds diagnostics, a main-thread mode, test toggles, a one-click benchmark and a draw-only lag fix. **The real cause on the owner's laptop is NOT yet proven** (I cannot reproduce it, see below); the owner's numbers decide. Next: the owner sends numbers (see "Next step"), then Stage 1 (harp).
+Current state: **Stage 0.7 finished** (2026-11-23): cut the render GPU cost. Stage 0.5 (tracking in a Web Worker) and 0.6 (test bench) stay. The owner proved with his own numbers that the render steals GPU time from MediaPipe (render 60 fps uncapped: inference ~102 ms; render capped at 20 fps: ~62 ms). This stage makes the render much cheaper and adds a one-click "Compare render settings" table. **I could NOT measure the effect: the only browser I have is a throttled window (render ~1 fps there), so the owner's table decides the default.** Next: the owner sends the table (see "Next step"), then Stage 1 (harp).
+
+## Stage 0.7 — what changed
+
+1. **The camera is no longer drawn into the canvas.** The tracker's own `<video>` element (class `cam`, `src/style.css`) becomes the visible camera layer (class `layer`): CSS `object-fit: cover|contain`, `transform: scaleX(-1)`, dim = the video's own CSS opacity (`1 - videoDim`) over the dark page background (the same picture as before: video at `1-dim` over `#05060a`). The canvas above it is transparent and draws only effects. Layer order: video 0, effects canvas 1, sharp skeleton canvas 2, UI 3. **Alignment:** `cssVideoPoint()` in `src/render/renderScale.ts` does the CSS maths independently of `fitTransform`; a test proves both give the same point for cover and contain on 4 window shapes. In the browser the skeleton also sat on the hands with a fake camera (cover). I did not check it with a real moving hand.
+2. **Render scale** (`renderScale` 0.5 / 0.75 / 1, panel group View, saved). Effects canvas backing store = window x screen ratio (devicePixelRatio, capped by `maxDpr` and the hard cap 2) x scale; its CSS size stays the full window, so the browser upscales it. Instruments still draw in CSS pixels (they do not see the scale). **Skeleton stays sharp:** at scale < 1 the skeleton is drawn into a separate full-resolution canvas (`#overlay`, created lazily, `display:none` when the skeleton is off); at scale 1 it goes into the normal canvas. Checked by screenshot at 0.5: strings and sparks soft, skeleton lines crisp.
+   **Default is 0.75 and PROVISIONAL.** I have no usable measurement (see below). Right now the canvas draws almost nothing, so the scale matters only once there are effects; 0.75 is the cheap-but-safe pick. Change `renderScale` in `DEFAULT_CONFIG` after the owner's table.
+3. **Software 2D experiment** (`software2d`, off by default, saved): creates the 2D context with `willReadFrequently: true` (Chrome then draws on the CPU and uploads the result). A canvas can only get its context once, so switching replaces the `<canvas>` element (same id); the renderer reads `renderer.ctx` fresh every frame. **Result: unknown.** It runs without errors (it was case 6 of a full comparison in my browser) but I have no valid numbers. It is row 6 of the comparison so the owner's table answers it. Keep it only if row 6 clearly beats row 2 and still looks smooth.
+4. **Render fps cap** kept (slider 0..60 step 5; use 30 or 20; 0 = off). **"Auto" idea (NOT built, as asked):** measure inference avg for a few seconds; if it is above the target (e.g. 45 ms) lower the render cap 60 -> 30 -> 20 and/or `renderScale` 1 -> 0.75 -> 0.5, and raise them again when inference has been well under target for ~10 s. Needs a hysteresis so it does not oscillate, and must never touch tracking.
+5. **"Compare render settings" button** (debug panel, first button; `src/core/renderBench.ts`, wired in `main.ts`). Flow: 5 s countdown with the on-screen message "Keep BOTH hands visible to the camera", then 6 cases, ~10 s each (1.2 s settle first): 1 old (video in canvas, 1.0, no cap), 2 new (video element, 1.0), 3 element 0.75, 4 element 0.5, 5 element 0.5 + cap 30, 6 EXPERIMENT element 1.0 + software 2D. Each prints: render fps, inference avg/p95, tracking fps, frame age avg/p95, hand samples ("N of M", share with two hands). **Samples with no hand are discarded.** A case runs on (up to 20 s) until it has 40 hand samples; a row with fewer than 25 says "TOO FEW, do not trust". Tracking fps is computed only from consecutive results that both had a hand (a gap with no hands does not look like slow tracking). The debug panel is hidden during the run (it covers the picture) and comes back with the table; the same button turns into "Stop comparing". All settings are put back afterwards and nothing is saved by the run. **Copy report** includes the table. Choices to know about:
+   - During the run a **synthetic harp-like effects load** is ON (`src/render/testLoad.ts`: 12 glowing strings with 3 additive stroke layers, 120 glow sprites, 4 big soft blobs; no shadowBlur) and the skeleton is hidden. Reason: the canvas has nothing to draw yet, so without it scales 1.0 / 0.75 / 0.5 could not differ. It is a stand-in for the harp, not a measurement of the harp. The same load is a panel toggle (`synthetic effects load`, not saved).
+   - Row 6 (software 2D) is an addition to the five rows asked for, so the experiment gets an answer in the same run (run time ~1.5 min).
+   - The tracking mode and delegate stay as the owner has them set (report header says which).
+6. **Panel:** the render line now shows the window size AND the effects canvas size in real pixels, and a "layers" line (video element/canvas, scale, 2D GPU/software, test load). `HandTracker.onSample` (new, tiny) hands raw per-result numbers to the comparison. Worker architecture, gestures, instruments, draw-ahead logic: untouched.
+7. **PLAN.md updated (owner approved):** section 4 tree now lists `trackerWorker.ts` (and the new renderer description), the "Tracking loop" and "Known risk" bullets in section 5 are rewritten for the Worker design, and a new bullet records the measured finding and the rule "render must stay cheap; heavy effects are drawn at a reduced internal resolution".
+8. Tests: **123 passing** (new: render scale maths + CSS-vs-canvas mapping, comparison collector/table/runner with a fake clock, settings). `npm run build` passes. **Production preview checked** (`npm run build` + `vite preview`): the Worker loads (`worker ready, delegate GPU`, hands found), the AudioWorklet loads (`worklet ok`), canvas 960x720 at default scale 0.75 in a 1024x768 window at dpr 1.25.
+
+### What I measured, and what I could NOT (Stage 0.7)
+
+- I ran the full comparison (all 6 cases, fake camera with the MediaPipe sample photo of two hands, production build). The window I have renders at ~1 fps and the camera stream at ~1 fps, so every row said render 1.0 fps, tracking 1.0 fps, inference 104-120 ms, "TOO FEW" samples. That proves the button, the countdown, the discard rule, the restore of settings and the table work. **It says nothing about GPU cost.** I am not quoting those numbers as findings.
+- Not seen with a real camera or real moving hands: alignment of the skeleton in "contain" mode (only the unit test), the draw-ahead skeleton on the new layers, 60 fps.
+- Possible cost of the new layers that I could not measure: the compositor now draws the video (opacity < 1) and the canvas as two layers. The old way drew one canvas.
+- Not built, on purpose: Stage 6 "record canvas" now needs to draw the `<video>` and the canvas together into a hidden canvas **only while recording** (the video is no longer inside the canvas). Proposal for Stage 6, PLAN.md section 7 is unchanged.
 
 ## Stage 0.6 — what changed
 
@@ -47,7 +69,7 @@ What this shows (and what it does not):
 Evidence I have: main mode has lower inference and lower frame age (49 vs 71-76 ms here; 38-40 ms vs 105 ms on the owner's laptop) but blocks rendering (his 12 fps). Worker mode keeps render smooth but on his laptop the model is 2.5x slower for a reason I could not reproduce. **I leave the default at worker + GPU (unchanged from Stage 0.5) because I have no number from the owner's laptop that justifies a change.** The switch is saved in localStorage, so once the owner picks the best row from his numbers it stays on his machine; the repository default should then change to that row (one line in `DEFAULT_CONFIG`).
 
 Options if the worker stays slow on his laptop (not built; each needs the owner's OK because it changes visuals or the render path):
-1. **Video as a real `<video>` element under a transparent canvas** (the compositor draws/dims/mirrors it, the canvas only draws effects). Removes the full-screen video draw from the canvas GPU work. Touches the Stage 6 "record canvas" plan and the additive-glow look. Worth it only if the render fps cap / pixel ratio tests show contention.
+1. ~~**Video as a real `<video>` element under a transparent canvas**~~ **Built in Stage 0.7** (after the owner's numbers showed render contention).
 2. **`infer every 2` in main mode + the draw lag fix**: tracking 15 fps, render ~25-30 fps.
 3. **Prediction for the instruments** (`predictedTip`, Stage 1) to hide frame age for the harp.
 
@@ -59,6 +81,7 @@ Options if the worker stays slow on his laptop (not built; each needs the owner'
 - The draw lag fix and the render fps cap have not been seen with a real camera in a real 60 fps window.
 - The benchmark loads two more MediaPipe instances while the worker's one stays loaded (more GPU memory for ~25 s).
 - `.claude/launch.json` (dev/preview servers for the Claude app) is local only (listed in `.git/info/exclude`), not committed.
+- (0.7) `videoFit` "contain" and the draw-ahead skeleton on the new layers were not seen with a real hand; with the video as a separate element, the video is no longer in the canvas (matters for Stage 6 "Record performance", see Stage 0.7).
 
 ## Stage 0.5 — what changed (still true)
 
@@ -113,7 +136,7 @@ A bigger change I did **not** make (it touches the Stage 6 "record canvas" plan)
 1. **Worker needs a small shim for MediaPipe (`self.import`).** MediaPipe loads its WASM glue with `importScripts()`, which does not work in a module worker, and the fallback (`import()`) fails with `ModuleFactory not set` (I hit this error). `trackerWorker.ts` therefore defines `self.import`, a hook MediaPipe itself looks for: it `fetch`es the glue file (same pinned jsdelivr URL) and runs it with an indirect `eval`. Needs a page without a strict CSP (GitHub Pages / Vercel have none by default). The alternative is a classic worker (`worker.format: "iife"`), but then dev and build would differ in how workers load, which is exactly the trap the AudioWorklet fell into. Tell the agent if you prefer that.
 2. **"Grab newest when free" (`pickupOnFree`, on by default).** The brief says: if the worker is busy, drop the new frame. I do that, but with one refinement: when the worker finishes and a newer camera frame arrived meanwhile, that newest frame is sent immediately instead of waiting for the next camera frame. Still max one in flight, still no queue, older frames are dropped. Without it, a ~40 ms inference on a 33 ms camera would idle until the next camera tick and tracking would fall toward 15 fps. It is a live toggle: untick it in the panel to get the literal behaviour and compare.
 3. All the Stage 0 deviations still stand (`?worker&url` for worklets, now approved and in PLAN; extra small files; 5 tips instead of 4; side by screen position).
-4. **PLAN.md suggestions (not changed, owner decides):** section 4 file tree should list `core/trackerWorker.ts`, and the "Known risk" bullet and the "Tracking loop" bullet in section 5 now describe the old main-thread design.
+4. ~~PLAN.md suggestions (tree, "Known risk", "Tracking loop")~~ **Done in Stage 0.7** with the owner's approval.
 
 ## What is NOT done (on purpose, later stages)
 
@@ -134,15 +157,13 @@ A bigger change I did **not** make (it touches the Stage 6 "record canvas" plan)
 
 ## Next step (exact)
 
-1. **Owner runs the app on his laptop with both hands in view**, presses **D**, and for EACH of these settings (switch in the panel, press **Reset numbers**, wait ~15 s, press **Copy report**, paste to the agent):
-   - A: tracking mode **worker**, delegate **GPU** (the default)
-   - B: **worker**, **GPU**, **render fps cap 30** (tests GPU contention)
-   - C: tracking mode **main**, delegate **GPU**
-   - D: **main**, **GPU**, **infer every 2**
-   Numbers wanted per setting: render fps, tracking fps, inference avg/p95, frame age avg/p95 and the **"worker GL" line** (the "main GL" and "same GPU" lines once).
-2. Then press **Run benchmark** once (hands in view, ~25 s) and paste the benchmark block too.
-3. Agent decides from those numbers: change `DEFAULT_CONFIG` (trackMode / delegate / renderFpsCap) and/or build option 1 (video element layer) if B is much faster than A.
-4. Then **Stage 1: Harp** (strings, pluck detection, Karplus-Strong worklet in `src/audio/worklets/ks-string.ts` loaded with `?worker&url`, scales; add render-side interpolation; use `predictedTip` for pluck detection).
+1. **Owner starts the app (worker + GPU, tracking mode as it was), presses D, presses "Compare render settings"**, stands back and keeps BOTH hands in view and moving a little for ~1.5 minutes (countdown first), then presses **Copy report** and pastes it to the agent. Tracking mode/delegate must stay at worker + GPU for the table to match his earlier numbers.
+2. Agent reads the table (rows with "TOO FEW" are not trusted; ask for a re-run if hands were missing). Goal: inference avg <= 45 ms and frame age avg <= 70 ms at render 60 fps (or a stable 30). Then:
+   - set `renderScale` / `renderFpsCap` in `DEFAULT_CONFIG` to the best row that still looks good (provisional default today: scale 0.75, cap 0);
+   - keep `software2d` only if row 6 clearly beats row 2 (otherwise leave it as a hidden test toggle or remove it);
+   - if row 2 is not much better than row 1 the video-element change did not help the GPU: then look at the remaining cost (compositing two layers, the synthetic load itself) before Stage 1.
+   - If no row reaches the goal: next ideas are the "auto" idea above, `numHands` 1 for one-hand instruments, `infer every 2`, and a lower camera size.
+3. Then **Stage 1: Harp** (strings, pluck detection, Karplus-Strong worklet in `src/audio/worklets/ks-string.ts` loaded with `?worker&url`, scales; add render-side interpolation; use `predictedTip` for pluck detection).
 
 ## Tunables the owner should test (debug panel, key D)
 
@@ -156,6 +177,10 @@ A bigger change I did **not** make (it touches the Stage 6 "record canvas" plan)
 | `delegate` | GPU | Switch to CPU and compare inference avg/p95 and frame age. Keep the faster one that still tracks well. |
 | `grab newest when free` | on | Untick and compare tracking fps and frame age. |
 | `max pixel ratio` | 2 | If render fps is low, set 1 or 1.25 and see if it jumps. |
+| `render scale` | 0.75 | 0.5 / 0.75 / 1: internal resolution of the effects canvas (CSS upscales it). Lower = less GPU. Best value comes from "Compare render settings". |
+| `video layer` | element | `canvas` = the old way (video drawn into the canvas), only to compare. |
+| `2D canvas in software (test)` | off | On = CPU-drawn canvas. Does inference drop? Does it stay smooth? |
+| `synthetic effects load (test)` | off | On = harp-like glow so render settings can be judged before the harp exists. |
 | `minCutoff` | 2.0 | Hand shakes while resting? lower it (1.0-1.5). Hand feels sticky/laggy when moving slowly? raise it. |
 | `beta` | 10 | Lag on fast moves? raise it (15-25). Jitter on fast moves? lower it. |
 | `pinchOn` / `pinchOff` | 0.25 / 0.35 | Pinch hard to trigger? raise `pinchOn` (0.3). Pinch flickers or sticks? widen the gap. |

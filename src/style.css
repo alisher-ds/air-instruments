@@ -23,16 +23,57 @@ body {
   overflow: hidden;
 }
 
-canvas#stage {
+/* Layers, bottom to top: camera <video> (0), effects canvas (1), sharp skeleton canvas (2), UI (3). */
+
+/* The camera <video> is always in the page (the tracker reads it). By default it is invisible. */
+video.cam {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 2px;
+  height: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* videoMode "element": the compositor shows, mirrors and dims the camera. The canvas above draws only effects.
+   object-fit and the mirror give exactly the mapping of fitTransform() (see renderScale.test.ts), so landmarks line up.
+   The dim is the video's own opacity over the dark page background (same picture as video + black overlay). */
+video.cam.layer {
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transform: scaleX(-1);
+  opacity: var(--cam-opacity, 0.5);
+  z-index: 0;
+}
+
+video.cam.layer.contain {
+  object-fit: contain;
+}
+
+canvas#stage,
+canvas#overlay {
   position: fixed;
   inset: 0;
   display: block;
+  pointer-events: none;
+}
+
+canvas#stage {
+  z-index: 1;
+}
+
+canvas#overlay {
+  z-index: 2;
 }
 
 #ui {
   position: fixed;
   inset: 0;
   pointer-events: none;
+  z-index: 3;
 }
 
 #ui > * {
@@ -140,6 +181,11 @@ canvas#stage {
   border-radius: 7px;
 }
 
+.btn-accent {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 /* ---------- HUD ---------- */
 
 .hud {
@@ -231,6 +277,33 @@ canvas#stage {
   border: 1px solid rgba(255, 107, 107, 0.5);
   border-radius: 8px;
   padding: 6px 12px;
+}
+
+/* ---------- message banner (render comparison) ---------- */
+
+.banner {
+  position: absolute;
+  left: 50%;
+  bottom: 8%;
+  transform: translateX(-50%);
+  width: min(92vw, 760px);
+  text-align: center;
+  padding: 14px 20px;
+  border-radius: 14px;
+  background: rgba(8, 10, 18, 0.88);
+  border: 1px solid var(--accent);
+  pointer-events: none !important;
+}
+
+.banner-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.banner-detail {
+  font-size: 1.05rem;
+  color: #ffd98a;
 }
 
 /* ---------- debug panel ---------- */
