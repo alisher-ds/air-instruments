@@ -6,6 +6,8 @@
 // named in PLAN.md, was verified NOT to work in `npm run build`: Vite inlines the raw .ts as a data: URI with a
 // wrong MIME type. See HANDOFF.md.)
 import dummyWorkletUrl from "./worklets/dummy.ts?worker&url";
+import ksWorkletUrl from "./worklets/ks-string.ts?worker&url";
+import type { PluckParams } from "./ksVoice";
 
 export type WorkletStatus = "not-started" | "loading" | "ok" | "failed";
 
@@ -16,6 +18,18 @@ export class AudioEngine {
   private readonly master: GainNode;
   private readonly limiter: DynamicsCompressorNode;
   private dummyNode: AudioWorkletNode | null = null;
+  /** The string synth (ONE node, all voices inside). null until its worklet has loaded. */
+  private ksNode: AudioWorkletNode | null = null;
+  /** The string synth's bus: everything the harp plays goes through it into `input`. */
+  readonly stringBus: GainNode;
+
+  /** "ks-string" worklet (the harp's sound). */
+  ksStatus: WorkletStatus = "not-started";
+  ksError = "";
+  /** Plucks sent to the synth, and the time from "landmarks received" to "message handed to the audio thread" (ms). */
+  pluckCount = 0;
+  lastPluckDelayMs = 0;
+  maxPluckDelayMs = 0;
 
   workletStatus: WorkletStatus = "not-started";
   workletError = "";
@@ -41,6 +55,10 @@ export class AudioEngine {
     this.limiter.attack.value = 0.003;
     this.limiter.release.value = 0.15;
 
+    this.stringBus = this.ctx.createGain();
+    this.stringBus.gain.value = 0.9;
+    this.stringBus.connect(this.input);
+
     this.input.connect(this.master);
     this.master.connect(this.limiter);
     this.limiter.connect(this.ctx.destination);
@@ -53,7 +71,53 @@ export class AudioEngine {
     } catch (e) {
       console.warn("AudioContext could not resume:", e);
     }
-    await this.loadDummyWorklet();
+    await Promise.all([this.loadDummyWorklet(), this.loadKsWorklet()]);
+  }
+
+  private async loadKsWorklet(): Promise<void> {
+    this.ksStatus = "loading";
+    try {
+      await this.ctx.audioWorklet.addModule(ksWorkletUrl);
+      const node = new AudioWorkletNode(this.ctx, "ks-string-processor", {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [2],
+      });
+      node.port.onmessage = (e: MessageEvent) => {
+        if (e.data?.type === "ready") {
+          this.ksStatus = "ok";
+          this.ksError = "";
+        }
+      };
+      node.connect(this.stringBus);
+      this.ksNode = node;
+      this.ksStatus = "ok"; // the module loaded and the node exists; "ready" from the audio thread confirms it later
+    } catch (e) {
+      this.ksStatus = "failed";
+      this.ksError = e instanceof Error ? e.message : String(e);
+      console.error("String synth worklet failed to load:", e);
+    }
+  }
+
+  /**
+   * Plays a string. `receivedAt` = performance.now() when the landmarks behind this pluck arrived, so the panel can show
+   * "landmarks received -> sound scheduled" (PLAN.md: < 5 ms). Returns false if the synth is not available.
+   */
+  pluck(p: PluckParams, receivedAt?: number): boolean {
+    const node = this.ksNode;
+    if (!node) return false;
+    node.port.postMessage({ type: "pluck", ...p });
+    this.pluckCount++;
+    if (receivedAt !== undefined) {
+      this.lastPluckDelayMs = performance.now() - receivedAt;
+      this.maxPluckDelayMs = Math.max(this.maxPluckDelayMs, this.lastPluckDelayMs);
+    }
+    return true;
+  }
+
+  /** Fade out one string's voices (e.g. the string was deleted), or all of them. */
+  stopStrings(stringId?: number): void {
+    this.ksNode?.port.postMessage({ type: "stop", stringId });
   }
 
   private async loadDummyWorklet(): Promise<void> {

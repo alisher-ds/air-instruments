@@ -273,6 +273,11 @@ const loop = new MainLoop((_dt, now) => {
             workletError: audio.workletError,
             workletSampleRate: audio.workletSampleRate,
             sampleRate: audio.ctx.sampleRate,
+            ksStatus: audio.ksStatus,
+            ksError: audio.ksError,
+            plucks: audio.pluckCount,
+            pluckDelayMs: audio.lastPluckDelayMs,
+            pluckDelayMaxMs: audio.maxPluckDelayMs,
           }
         : null,
       recording: { active: recorder.recording, seconds: recorder.seconds, frames: recorder.frameCount },

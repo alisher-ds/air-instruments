@@ -423,3 +423,29 @@ canvas#overlay {
   text-align: right;
   font-family: ui-monospace, Menlo, Consolas, monospace;
 }
+
+/* ---------- harp controls ---------- */
+
+.harp-bar {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 6px 8px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+
+.harp-select {
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 4px 8px;
+}

@@ -20,6 +20,7 @@ export const SAVED_KEYS: ReadonlyArray<keyof Config & string> = [
   "software2d",
   "renderFpsCap",
   "drawLeadEnabled",
+  "harpScale",
 ];
 
 type StorageLike = Pick<Storage, "getItem" | "setItem">;

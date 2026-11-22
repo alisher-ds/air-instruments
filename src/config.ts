@@ -2,6 +2,7 @@
 // Constants that are not meant to be tuned live (URLs, camera size) are exported separately below.
 
 import pkg from "../package.json";
+import type { ScaleName } from "./audio/scales";
 
 export interface Config {
   // --- smoothing (One Euro filter, applied to every landmark) ---
@@ -52,7 +53,7 @@ export interface Config {
   /** Camera size. A TEST toggle: reopens the camera. */
   cameraRes: "640x480" | "320x240" | "1280x720";
 
-  // --- predictive triggering (groundwork, OFF by default, no instrument uses it yet) ---
+  // --- predictive triggering (the harp uses it for plucks; turn it off to compare) ---
   predictEnabled: boolean;
   /** How far ahead (ms) a fingertip is extrapolated from its velocity. ~1 camera frame = 33 ms. */
   predictLeadMs: number;
@@ -89,6 +90,30 @@ export interface Config {
   /** Draw at most this many frames per second (0 = every display frame). A speed TEST: does less GPU work for render help inference? */
   renderFpsCap: number;
 
+  // --- harp (Stage 1). Lengths and speeds are in hand sizes so they work at any distance from the camera. ---
+  /** Notes the strings can play. */
+  harpScale: ScaleName;
+  /** String length / canvas diagonal that maps to the HIGHEST note (shorter strings clamp to it). */
+  harpMinLenFrac: number;
+  /** ...and to the LOWEST note. */
+  harpMaxLenFrac: number;
+  /** A new string shorter than this many hand sizes is cancelled (accidental pinches). */
+  harpMinStringHands: number;
+  /** A pinch this close (hand sizes) to a string's body or endpoint grabs it instead of creating a new one. */
+  harpGrabDist: number;
+  /** Per STRING (not per finger): a string cannot be plucked again for this long. ms. */
+  harpCooldownMs: number;
+  /** Crossing speed (hand sizes/s) perpendicular to the string below which a crossing is ignored (drift, jitter). */
+  harpPluckMinSpeed: number;
+  /** ...and at which a pluck is at full strength. */
+  harpPluckFullSpeed: number;
+  /** After a pinch ends, that hand cannot pluck for this long (opening the fingers must not strike the new string). ms. */
+  harpPinchLockoutMs: number;
+  /** Flicking a grabbed string faster than this (hand sizes/s) toward a screen edge deletes it. */
+  harpFlickSpeed: number;
+  /** Both open palms held still this long clear all strings. ms. */
+  harpClearHoldMs: number;
+
   // --- recording ---
   recordMaxSeconds: number;
 }
@@ -116,7 +141,7 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   numHands: 2,
   cameraRes: "640x480",
 
-  predictEnabled: false,
+  predictEnabled: true,
   predictLeadMs: 33,
   predictMaxShift: 0.5,
 
@@ -133,6 +158,18 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   software2d: false,
   testLoad: false,
   renderFpsCap: 30,
+
+  harpScale: "major-pentatonic",
+  harpMinLenFrac: 0.08,
+  harpMaxLenFrac: 0.6,
+  harpMinStringHands: 1.5,
+  harpGrabDist: 0.5,
+  harpCooldownMs: 60,
+  harpPluckMinSpeed: 0.4,
+  harpPluckFullSpeed: 6,
+  harpPinchLockoutMs: 250,
+  harpFlickSpeed: 6,
+  harpClearHoldMs: 1500,
 
   recordMaxSeconds: 60,
 });
@@ -195,10 +232,21 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "View", key: "renderFpsCap", label: "render fps cap (0 = off)", min: 0, max: 60, step: 5 },
   { kind: "boolean", group: "View", key: "software2d", label: "2D canvas in software (test)" },
   { kind: "boolean", group: "View", key: "testLoad", label: "synthetic effects load (test)" },
+  { kind: "choice", group: "Harp", key: "harpScale", label: "scale", options: ["major-pentatonic", "minor-pentatonic", "harmonic-minor"] },
+  { kind: "number", group: "Harp", key: "harpMinLenFrac", label: "highest note at length (x diagonal)", min: 0.02, max: 0.4, step: 0.01 },
+  { kind: "number", group: "Harp", key: "harpMaxLenFrac", label: "lowest note at length (x diagonal)", min: 0.2, max: 1, step: 0.01 },
+  { kind: "number", group: "Harp", key: "harpMinStringHands", label: "min string length (hands)", min: 0.5, max: 4, step: 0.1 },
+  { kind: "number", group: "Harp", key: "harpGrabDist", label: "grab distance (hands)", min: 0.1, max: 1.5, step: 0.05 },
+  { kind: "number", group: "Harp", key: "harpCooldownMs", label: "string cooldown (ms)", min: 0, max: 300, step: 5 },
+  { kind: "number", group: "Harp", key: "harpPluckMinSpeed", label: "pluck min speed (hands/s)", min: 0, max: 3, step: 0.05 },
+  { kind: "number", group: "Harp", key: "harpPluckFullSpeed", label: "pluck full-strength speed (hands/s)", min: 1, max: 15, step: 0.5 },
+  { kind: "number", group: "Harp", key: "harpPinchLockoutMs", label: "no pluck after pinch (ms)", min: 0, max: 800, step: 10 },
+  { kind: "number", group: "Harp", key: "harpFlickSpeed", label: "flick-delete speed (hands/s)", min: 2, max: 20, step: 0.5 },
+  { kind: "number", group: "Harp", key: "harpClearHoldMs", label: "clear-all hold (ms)", min: 500, max: 4000, step: 100 },
   { kind: "boolean", group: "Draw lag fix", key: "drawLeadEnabled", label: "draw skeleton ahead (by frame age)" },
   { kind: "number", group: "Draw lag fix", key: "drawLeadMaxMs", label: "max lead (ms)", min: 0, max: 300, step: 10 },
   { kind: "number", group: "Draw lag fix", key: "drawLeadMaxShift", label: "max shift (x handSize)", min: 0.05, max: 1.5, step: 0.05 },
-  { kind: "boolean", group: "Prediction", key: "predictEnabled", label: "predict (not used yet)" },
+  { kind: "boolean", group: "Prediction", key: "predictEnabled", label: "predict fingertips (harp plucks)" },
   { kind: "number", group: "Prediction", key: "predictLeadMs", label: "lead (ms)", min: 0, max: 100, step: 1 },
   { kind: "number", group: "Prediction", key: "predictMaxShift", label: "max shift (x handSize)", min: 0.05, max: 1, step: 0.05 },
 ];
