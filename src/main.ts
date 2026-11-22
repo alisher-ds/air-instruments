@@ -8,6 +8,7 @@ import { AudioEngine } from "./audio/engine";
 import { config } from "./config";
 import { MainLoop } from "./core/loop";
 import { Recorder, recordingFileName } from "./core/recording";
+import { RollingStats } from "./core/rollingStats";
 import { HandTracker, TrackingError, type TrackingErrorKind } from "./core/tracking";
 import { createInstruments } from "./instruments";
 import type { HandFrame, Instrument } from "./instruments/Instrument";
@@ -39,7 +40,11 @@ tracker.pipeline.setViewport(renderer.width, renderer.height);
 renderer.onResize = (w, h) => tracker.pipeline.setViewport(w, h);
 
 const hud = new Hud(ui, instruments, (i) => selectInstrument(i));
-const debug = new DebugPanel(ui, { toggleRecord, beep: () => audio?.beep() });
+const debug = new DebugPanel(ui, {
+  toggleRecord,
+  beep: () => audio?.beep(),
+  applyConfig: () => tracker.setDelegate(config.delegate),
+});
 
 // --- instruments ---------------------------------------------------------
 
@@ -66,6 +71,12 @@ tracker.onFrame = (frame) => {
 
 tracker.onError = (err) => showFailure(err.kind);
 
+// GPU was asked for but CPU is running (GPU failed): make the panel say what is really happening.
+tracker.onDelegateChange = (delegate) => {
+  config.delegate = delegate;
+  debug.syncTunables();
+};
+
 // --- recording -----------------------------------------------------------
 
 function toggleRecord(): void {
@@ -90,19 +101,35 @@ function toggleRecord(): void {
 
 // --- render loop ---------------------------------------------------------
 
+// The panel text and REC badge update ~4 times a second, not every frame.
+const PANEL_INTERVAL_MS = 250;
+const renderJs = new RollingStats(120);
+const videoDraw = new RollingStats(120);
 let debugTick = 0;
+
 const loop = new MainLoop((_dt, now) => {
+  const t0 = performance.now();
   renderer.beginFrame(tracker.video);
+  videoDraw.push(renderer.lastBeginMs);
   const { ctx } = renderer;
   current?.render(ctx, fx);
   if (latestFrame && (config.showHands || debug.visible)) drawHands(ctx, latestFrame);
+  renderJs.push(performance.now() - t0);
 
-  // Debug text and REC badge update ~10 times a second, not every frame.
-  if (now - debugTick > 100) {
+  if (now - debugTick > PANEL_INTERVAL_MS) {
     debugTick = now;
     hud.setRecording(recorder.recording, recorder.seconds);
+    if (!debug.visible) return; // no stats work at all while the panel is hidden
+    const js = renderJs.summary();
     debug.update({
       renderFps: loop.fps,
+      render: {
+        jsAvgMs: js.avg,
+        jsP95Ms: js.p95,
+        jsMaxMs: js.max,
+        videoDrawAvgMs: videoDraw.summary().avg,
+        dpr: renderer.dpr,
+      },
       tracker: tracker.getStats(),
       frame: latestFrame,
       audio: audio

@@ -2,9 +2,9 @@
 //
 // Two layers:
 //  - TrackManager / HandPipeline: pure logic (ids, hold-on-loss, smoothing, mapping). Tested without a camera.
-//  - HandTracker: the browser part (camera, MediaPipe, per-frame scheduling).
+//  - HandTracker: the browser part. It owns the camera and the frame loop on the MAIN thread and sends camera frames
+//    to the tracking worker (trackerWorker.ts), where MediaPipe runs. The main thread never waits for the worker.
 
-import type { HandLandmarker } from "@mediapipe/tasks-vision";
 import {
   CAMERA,
   HAND_MODEL_URL,
@@ -16,8 +16,11 @@ import {
 } from "../config";
 import type { HandFrame, Vec2 } from "../instruments/Instrument";
 import { dist, fitTransform, normalizedToCanvas } from "./geometry";
+import { FrameGate } from "./frameGate";
 import { HandAnalyzer } from "./gestures";
+import { RollingStats } from "./rollingStats";
 import { LandmarkSmoother } from "./smoothing";
+import { unpackHands, type DelegateName, type FromWorker, type InitMessage, type ToWorker } from "./trackerProtocol";
 
 // ---------------------------------------------------------------------------
 // Pure part
@@ -170,50 +173,106 @@ export class TrackingError extends Error {
   }
 }
 
+export type WorkerState = "not-started" | "loading" | "ready" | "failed";
+
 export interface TrackerStats {
-  delegate: "GPU" | "CPU" | "none";
-  /** Last frame, ms. */
+  delegate: DelegateName | "none";
+  workerState: WorkerState;
+  /** Why GPU was not used, if it fell back. Empty otherwise. */
+  fallbackReason: string;
+  /** Time inside detectForVideo, measured INSIDE the worker. Last frame, then the last 120 frames. */
   inferenceMs: number;
-  /** Rolling over the last 120 frames, ms. */
   inferenceAvgMs: number;
   inferenceP95Ms: number;
   inferenceMaxMs: number;
-  /** Averages over the whole session, split by whether a hand was in the picture. */
+  /** Camera frame captured -> landmarks arrive on the main thread (grab + worker + messages + waiting). */
+  frameAgeMs: number;
+  frameAgeAvgMs: number;
+  frameAgeP95Ms: number;
+  /** false = the browser gave no capture time, so frame age counts from when we first saw the frame (too small). */
+  frameAgeFromCapture: boolean;
+  /** createImageBitmap(video) on the main thread, average. */
+  grabAvgMs: number;
+  /** Frame sent -> answer received, average (worker inference + queueing + message cost). */
+  roundTripAvgMs: number;
+  /** Averages over the session, split by whether a hand was in the picture. */
   avgWithHandsMs: number;
   avgNoHandsMs: number;
   framesWithHands: number;
   framesNoHands: number;
+  /** Frames per second that produced landmarks. */
   trackingFps: number;
+  /** New camera frames per second as seen by the browser. */
+  cameraFps: number;
+  /** Camera frames that were not sent to the worker (it was busy), percent. */
+  droppedPercent: number;
+  watchdogTimeouts: number;
   videoWidth: number;
   videoHeight: number;
   usesVideoFrameCallback: boolean;
 }
 
+interface InFlight {
+  seq: number;
+  /** performance.now() time the camera captured the frame (or when we first saw it, see frameAgeFromCapture). */
+  captureTime: number;
+  fromCapture: boolean;
+  sentAt: number;
+}
+
 const SAMPLE_WINDOW = 120;
+/** If the browser's capture time is further than this behind "now", it is not believable. */
+const MAX_BELIEVABLE_AGE_MS = 1000;
 
 export class HandTracker {
   readonly video: HTMLVideoElement;
   readonly pipeline = new HandPipeline();
   onFrame: (frame: HandFrame) => void = () => {};
   onError: (err: TrackingError) => void = () => {};
+  /** Called when the delegate that is really running differs from the one asked for (GPU -> CPU fallback). */
+  onDelegateChange: (delegate: DelegateName) => void = () => {};
 
   private stream: MediaStream | null = null;
-  private landmarker: HandLandmarker | null = null;
-  private landmarkerPromise: Promise<HandLandmarker> | null = null;
-  private delegate: "GPU" | "CPU" | "none" = "none";
+  private worker: Worker | null = null;
+  private workerState: WorkerState = "not-started";
+  private initWaiter: { resolve: () => void; reject: (e: TrackingError) => void } | null = null;
+  private delegate: DelegateName | "none" = "none";
+  /** The delegate the worker was last asked for (or is running), so repeated requests for it do nothing. */
+  private requested: DelegateName | null = null;
+  private fallbackReason = "";
+
   private running = false;
+  private readonly hasRvfc: boolean;
+  private loopHandle = 0;
   private lastVideoTime = -1;
+
+  private readonly gate = new FrameGate();
+  private inflight: InFlight | null = null;
+  /** A newer camera frame arrived while the worker was busy. */
+  private waiting = false;
+  private latestCapture = 0;
+  private latestFromCapture = false;
+  /** Bumped whenever frames in flight must be thrown away (pause, delegate switch). */
+  private epoch = 0;
+  private seq = 0;
   private lastTimestamp = 0;
-  private lastFrameAt = 0;
-  private fpsEma = 0;
-  private samples: number[] = [];
-  private lastInference = 0;
+
+  // stats
+  private readonly inference = new RollingStats(SAMPLE_WINDOW);
+  private readonly frameAge = new RollingStats(SAMPLE_WINDOW);
+  private readonly grab = new RollingStats(SAMPLE_WINDOW);
+  private readonly roundTrip = new RollingStats(SAMPLE_WINDOW);
   private sumWith = 0;
   private nWith = 0;
   private sumNo = 0;
   private nNo = 0;
-  private fellBackToCpu = false;
-  private readonly hasRvfc: boolean;
+  private cameraFrames = 0;
+  private sentFrames = 0;
+  private lastResultAt = 0;
+  private lastCameraAt = 0;
+  private fpsEma = 0;
+  private cameraFpsEma = 0;
+  private lastFromCapture = false;
 
   constructor() {
     const v = document.createElement("video");
@@ -227,7 +286,7 @@ export class HandTracker {
     this.hasRvfc = "requestVideoFrameCallback" in v;
   }
 
-  /** Opens the camera and loads the model (in parallel). Safe to call again after a failure. */
+  /** Opens the camera and starts the worker (in parallel). Safe to call again after a failure. */
   async start(): Promise<void> {
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       throw new TrackingError(
@@ -235,7 +294,11 @@ export class HandTracker {
         "This page cannot use the camera. Open it from https:// or from localhost.",
       );
     }
-    const [stream] = await Promise.all([this.openCamera(), this.ensureLandmarker()]);
+    this.pause();
+    this.releaseStream();
+    // A retry after a camera error finds the model already loaded: do not load it again.
+    const modelReady = this.workerState === "ready" && this.requested === config.delegate;
+    const [stream] = await Promise.all([this.openCamera(), modelReady ? Promise.resolve() : this.initWorker(config.delegate)]);
     this.stream = stream;
     this.video.srcObject = stream;
     try {
@@ -252,44 +315,67 @@ export class HandTracker {
 
   pause(): void {
     this.running = false;
+    this.epoch++;
+    this.cancelLoop();
+    this.inflight = null;
+    this.waiting = false;
+    this.gate.reset();
   }
 
   resume(): void {
-    if (this.running || !this.landmarker || !this.stream) return;
+    if (this.running || this.workerState !== "ready" || !this.stream) return;
     this.running = true;
-    this.lastFrameAt = 0;
+    this.cameraFpsEma = 0;
+    this.fpsEma = 0;
+    this.lastCameraAt = 0;
+    this.lastResultAt = 0;
     this.scheduleNext();
   }
 
   stop(): void {
-    this.running = false;
-    this.stream?.getTracks().forEach((t) => t.stop());
-    this.stream = null;
-    this.video.srcObject = null;
+    this.pause();
+    this.releaseStream();
+  }
+
+  /**
+   * Switch GPU/CPU while running. The worker reloads the model (a second or two); frames pause meanwhile.
+   * The stats window restarts so the new numbers belong to the new delegate only.
+   */
+  setDelegate(delegate: DelegateName): void {
+    if (!this.worker || this.workerState === "not-started") return;
+    if (this.requested === delegate && this.workerState !== "failed") return;
+    void this.initWorker(delegate).catch((e: unknown) => {
+      // A newer request replaced this one: not an error.
+      if (e instanceof TrackingError && e.kind === "unknown") return;
+      this.onError(e instanceof TrackingError ? e : new TrackingError("model", "Hand tracking could not be reloaded."));
+    });
   }
 
   getStats(): TrackerStats {
-    const s = this.samples;
-    let avg = 0;
-    let p95 = 0;
-    let max = 0;
-    if (s.length > 0) {
-      const sorted = [...s].sort((a, b) => a - b);
-      avg = s.reduce((a, b) => a + b, 0) / s.length;
-      p95 = sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95))]!;
-      max = sorted[sorted.length - 1]!;
-    }
+    const inf = this.inference.summary();
+    const age = this.frameAge.summary();
     return {
       delegate: this.delegate,
-      inferenceMs: this.lastInference,
-      inferenceAvgMs: avg,
-      inferenceP95Ms: p95,
-      inferenceMaxMs: max,
+      workerState: this.workerState,
+      fallbackReason: this.fallbackReason,
+      inferenceMs: inf.last,
+      inferenceAvgMs: inf.avg,
+      inferenceP95Ms: inf.p95,
+      inferenceMaxMs: inf.max,
+      frameAgeMs: age.last,
+      frameAgeAvgMs: age.avg,
+      frameAgeP95Ms: age.p95,
+      frameAgeFromCapture: this.lastFromCapture,
+      grabAvgMs: this.grab.summary().avg,
+      roundTripAvgMs: this.roundTrip.summary().avg,
       avgWithHandsMs: this.nWith ? this.sumWith / this.nWith : 0,
       avgNoHandsMs: this.nNo ? this.sumNo / this.nNo : 0,
       framesWithHands: this.nWith,
       framesNoHands: this.nNo,
       trackingFps: this.fpsEma,
+      cameraFps: this.cameraFpsEma,
+      droppedPercent: this.cameraFrames > 0 ? (100 * (this.cameraFrames - this.sentFrames)) / this.cameraFrames : 0,
+      watchdogTimeouts: this.gate.timeouts,
       videoWidth: this.video.videoWidth,
       videoHeight: this.video.videoHeight,
       usesVideoFrameCallback: this.hasRvfc,
@@ -297,6 +383,12 @@ export class HandTracker {
   }
 
   // --- camera ---
+
+  private releaseStream(): void {
+    this.stream?.getTracks().forEach((t) => t.stop());
+    this.stream = null;
+    this.video.srcObject = null;
+  }
 
   private async openCamera(): Promise<MediaStream> {
     try {
@@ -332,128 +424,234 @@ export class HandTracker {
     });
   }
 
-  // --- model ---
+  // --- worker ---
 
-  private ensureLandmarker(): Promise<HandLandmarker> {
-    if (!this.landmarkerPromise) {
-      this.landmarkerPromise = this.createLandmarker("GPU").catch((e: unknown) => {
-        this.landmarkerPromise = null; // allow a retry after a network failure
-        if (e instanceof TrackingError) throw e;
-        throw new TrackingError("model", "The hand-tracking model could not be loaded. Check your internet connection.");
-      });
+  private ensureWorker(): Worker {
+    if (this.worker) return this.worker;
+    let worker: Worker;
+    try {
+      // The literal `new Worker(new URL(...), { type: "module" })` form is what Vite recognises and bundles.
+      worker = new Worker(new URL("./trackerWorker.ts", import.meta.url), { type: "module", name: "hand-tracker" });
+    } catch (e) {
+      console.error("Could not create the tracking worker:", e);
+      throw new TrackingError("unsupported", "This browser cannot run the hand-tracking worker.");
     }
-    return this.landmarkerPromise;
+    worker.onmessage = (e: MessageEvent<FromWorker>) => this.handleWorkerMessage(e.data);
+    worker.onerror = (e) => {
+      console.error("Tracking worker error:", e.message || e);
+      this.worker?.terminate(); // a dead worker cannot be reused: the next start() makes a new one
+      this.worker = null;
+      this.requested = null;
+      this.workerFailed(new TrackingError("model", "The hand-tracking worker failed to start."));
+    };
+    this.worker = worker;
+    return worker;
   }
 
-  private async createLandmarker(preferred: "GPU" | "CPU"): Promise<HandLandmarker> {
-    const { FilesetResolver, HandLandmarker } = await import("@mediapipe/tasks-vision");
-    const vision = await FilesetResolver.forVisionTasks(MEDIAPIPE_WASM_URL);
-    const make = (delegate: "GPU" | "CPU") =>
-      HandLandmarker.createFromOptions(vision, {
-        baseOptions: { modelAssetPath: HAND_MODEL_URL, delegate },
-        runningMode: "VIDEO",
+  /** (Re)loads the model in the worker with this delegate. Resolves when the worker says "ready". */
+  private initWorker(delegate: DelegateName): Promise<void> {
+    const worker = this.ensureWorker();
+    // Whatever was in flight belongs to the old model: forget it.
+    this.epoch++;
+    this.inflight = null;
+    this.waiting = false;
+    this.gate.reset();
+    this.workerState = "loading";
+    this.requested = delegate;
+    // "unknown" marks "replaced by a newer request" (setDelegate ignores it).
+    this.initWaiter?.reject(new TrackingError("unknown", "Replaced by a newer request."));
+    return new Promise<void>((resolve, reject) => {
+      this.initWaiter = { resolve, reject };
+      const msg: InitMessage = {
+        type: "init",
+        delegate,
+        wasmUrl: MEDIAPIPE_WASM_URL,
+        modelUrl: HAND_MODEL_URL,
         numHands: NUM_HANDS,
-        ...MP_CONFIDENCE,
-      });
-    let lm: HandLandmarker;
-    if (preferred === "GPU") {
-      try {
-        lm = await make("GPU");
-        this.delegate = "GPU";
-      } catch (gpuError) {
-        console.warn("GPU delegate failed, falling back to CPU:", gpuError);
-        lm = await make("CPU");
-        this.delegate = "CPU";
-      }
-    } else {
-      lm = await make("CPU");
-      this.delegate = "CPU";
-    }
-    this.landmarker = lm;
-    return lm;
+        minHandDetectionConfidence: MP_CONFIDENCE.minHandDetectionConfidence,
+        minHandPresenceConfidence: MP_CONFIDENCE.minHandPresenceConfidence,
+        minTrackingConfidence: MP_CONFIDENCE.minTrackingConfidence,
+      };
+      worker.postMessage(msg satisfies ToWorker);
+    });
   }
 
-  // --- per-frame loop: one detection per NEW camera frame ---
+  private workerFailed(err: TrackingError): void {
+    this.workerState = "failed";
+    this.running = false;
+    this.cancelLoop();
+    const waiter = this.initWaiter;
+    this.initWaiter = null;
+    if (waiter) waiter.reject(err);
+    else this.onError(err);
+  }
+
+  private handleWorkerMessage(msg: FromWorker): void {
+    switch (msg.type) {
+      case "ready": {
+        this.workerState = "ready";
+        this.delegate = msg.delegate;
+        this.requested = msg.delegate;
+        this.fallbackReason = msg.fallbackReason ?? "";
+        this.resetStats();
+        this.waiting = false;
+        this.inflight = null;
+        this.gate.reset();
+        if (msg.delegate !== config.delegate) this.onDelegateChange(msg.delegate);
+        const waiter = this.initWaiter;
+        this.initWaiter = null;
+        waiter?.resolve();
+        // After a switch while running, the loop is still alive and the next camera frame is sent normally.
+        break;
+      }
+      case "result":
+        this.handleResult(msg);
+        break;
+      case "skipped":
+        if (this.inflight?.seq === msg.seq) {
+          this.inflight = null;
+          this.gate.release();
+        }
+        break;
+      case "error":
+        console.error("Tracking worker reported an error:", msg.message);
+        this.workerFailed(
+          new TrackingError(
+            msg.phase === "init" ? "model" : "unknown",
+            msg.phase === "init"
+              ? "The hand-tracking model could not be loaded. Check your internet connection."
+              : "Hand tracking stopped because of an error.",
+          ),
+        );
+        break;
+    }
+  }
+
+  // --- per-frame loop: one frame per NEW camera frame, at most one in flight ---
 
   private scheduleNext(): void {
     if (!this.running) return;
     if (this.hasRvfc) {
-      this.video.requestVideoFrameCallback(() => {
-        this.processFrame();
+      this.loopHandle = this.video.requestVideoFrameCallback((now, meta) => {
         this.scheduleNext();
+        // captureTime: when the camera captured the frame (same clock as performance.now()). Not always provided.
+        const cap = meta.captureTime;
+        const believable = typeof cap === "number" && cap <= now && now - cap < MAX_BELIEVABLE_AGE_MS;
+        this.onCameraFrame(now, believable ? cap : now, believable);
       });
     } else {
-      requestAnimationFrame(() => {
+      this.loopHandle = requestAnimationFrame((now) => {
+        this.scheduleNext();
         if (this.video.currentTime !== this.lastVideoTime) {
           this.lastVideoTime = this.video.currentTime;
-          this.processFrame();
+          this.onCameraFrame(now, now, false);
         }
-        this.scheduleNext();
       });
     }
   }
 
-  private processFrame(): void {
-    const lm = this.landmarker;
-    if (!lm || !this.running || this.video.readyState < 2) return;
+  private cancelLoop(): void {
+    if (this.loopHandle) {
+      if (this.hasRvfc) this.video.cancelVideoFrameCallback(this.loopHandle);
+      else cancelAnimationFrame(this.loopHandle);
+      this.loopHandle = 0;
+    }
+  }
 
-    // MediaPipe needs strictly increasing timestamps.
+  private onCameraFrame(now: number, captureTime: number, fromCapture: boolean): void {
+    this.cameraFrames++;
+    if (this.lastCameraAt > 0) {
+      const inst = 1000 / Math.max(1, now - this.lastCameraAt);
+      this.cameraFpsEma = this.cameraFpsEma === 0 ? inst : this.cameraFpsEma * 0.9 + inst * 0.1;
+    }
+    this.lastCameraAt = now;
+    this.latestCapture = captureTime;
+    this.latestFromCapture = fromCapture;
+
+    if (this.workerState !== "ready") return;
+    if (!this.gate.tryAcquire(now)) {
+      this.waiting = true; // worker busy: this frame is dropped (maybe replaced by a newer one when the worker is free)
+      return;
+    }
+    this.sendFrame(captureTime, fromCapture);
+  }
+
+  /** Gate is already acquired. Grabs the current video frame as a bitmap and moves it to the worker. */
+  private sendFrame(captureTime: number, fromCapture: boolean): void {
+    const worker = this.worker;
+    if (!worker || this.video.readyState < 2 || this.video.videoWidth === 0) {
+      this.gate.release();
+      return;
+    }
+    this.waiting = false;
+    this.sentFrames++;
+    const epoch = this.epoch;
+    const seq = ++this.seq;
     const t0 = performance.now();
-    const ts = t0 > this.lastTimestamp ? t0 : this.lastTimestamp + 0.001;
-    this.lastTimestamp = ts;
-
-    let detections: Vec2[][];
-    try {
-      const result = lm.detectForVideo(this.video, ts);
-      detections = result.landmarks.map((hand) => hand.map((p) => ({ x: p.x, y: p.y })));
-    } catch (e) {
-      this.handleDetectError(e);
-      return;
-    }
-    const t1 = performance.now();
-
-    this.recordTiming(t1 - t0, detections.length > 0, t1);
-    this.onFrame(this.pipeline.process(detections, t1));
+    createImageBitmap(this.video).then(
+      (bitmap) => {
+        if (epoch !== this.epoch || !this.running) {
+          bitmap.close();
+          return; // pause()/switch already reset the gate
+        }
+        const t1 = performance.now();
+        this.grab.push(t1 - t0);
+        // MediaPipe needs strictly increasing timestamps.
+        const ts = t1 > this.lastTimestamp ? t1 : this.lastTimestamp + 0.001;
+        this.lastTimestamp = ts;
+        this.inflight = { seq, captureTime, fromCapture, sentAt: t1 };
+        const msg: ToWorker = { type: "frame", seq, ts, bitmap };
+        worker.postMessage(msg, [bitmap]);
+      },
+      (e: unknown) => {
+        console.warn("createImageBitmap failed:", e);
+        if (epoch === this.epoch) this.gate.release();
+      },
+    );
   }
 
-  private handleDetectError(e: unknown): void {
-    if (this.delegate === "GPU" && !this.fellBackToCpu) {
-      // The GPU delegate can load fine and still fail on the first frame. Switch to CPU once.
-      this.fellBackToCpu = true;
-      console.warn("GPU detection failed, switching to CPU:", e);
-      this.running = false;
-      this.landmarker?.close();
-      this.landmarker = null;
-      this.landmarkerPromise = this.createLandmarker("CPU");
-      this.landmarkerPromise
-        .then(() => {
-          this.resume();
-        })
-        .catch(() => {
-          this.onError(new TrackingError("model", "Hand tracking failed on both GPU and CPU."));
-        });
-      return;
-    }
-    console.error("Hand tracking error:", e);
-    this.running = false;
-    this.onError(new TrackingError("unknown", "Hand tracking stopped because of an error."));
-  }
+  private handleResult(msg: Extract<FromWorker, { type: "result" }>): void {
+    const inf = this.inflight;
+    if (!inf || inf.seq !== msg.seq) return; // answer to a frame from before a pause / delegate switch
+    const arrival = performance.now();
+    this.inflight = null;
+    this.gate.release();
 
-  private recordTiming(ms: number, hasHands: boolean, now: number): void {
-    this.lastInference = ms;
-    this.samples.push(ms);
-    if (this.samples.length > SAMPLE_WINDOW) this.samples.shift();
+    // A newer camera frame is waiting: hand it to the worker NOW, before doing any main-thread work with this result.
+    if (this.waiting && this.running && config.pickupOnFree && this.gate.tryAcquire(arrival)) {
+      this.sendFrame(this.latestCapture, this.latestFromCapture);
+    }
+
+    const hasHands = msg.count > 0;
+    this.inference.push(msg.inferenceMs);
+    this.frameAge.push(arrival - inf.captureTime);
+    this.roundTrip.push(arrival - inf.sentAt);
+    this.lastFromCapture = inf.fromCapture;
     if (hasHands) {
-      this.sumWith += ms;
+      this.sumWith += msg.inferenceMs;
       this.nWith++;
     } else {
-      this.sumNo += ms;
+      this.sumNo += msg.inferenceMs;
       this.nNo++;
     }
-    if (this.lastFrameAt > 0) {
-      const inst = 1000 / Math.max(1, now - this.lastFrameAt);
+    if (this.lastResultAt > 0) {
+      const inst = 1000 / Math.max(1, arrival - this.lastResultAt);
       this.fpsEma = this.fpsEma === 0 ? inst : this.fpsEma * 0.9 + inst * 0.1;
     }
-    this.lastFrameAt = now;
+    this.lastResultAt = arrival;
+
+    this.onFrame(this.pipeline.process(unpackHands(msg.count, msg.perHand, msg.points), arrival));
+  }
+
+  private resetStats(): void {
+    this.inference.reset();
+    this.frameAge.reset();
+    this.grab.reset();
+    this.roundTrip.reset();
+    this.sumWith = this.nWith = this.sumNo = this.nNo = 0;
+    this.cameraFrames = 0;
+    this.sentFrames = 0;
+    this.fpsEma = 0;
+    this.lastResultAt = 0;
   }
 }

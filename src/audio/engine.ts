@@ -68,6 +68,7 @@ export class AudioEngine {
       node.port.onmessage = (e: MessageEvent) => {
         if (e.data?.type === "alive") {
           this.workletStatus = "ok";
+          this.workletError = ""; // it may have been slow (busy machine) and already been judged "failed"
           this.workletSampleRate = e.data.sampleRate;
         }
       };

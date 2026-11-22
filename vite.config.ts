@@ -6,6 +6,10 @@ export default defineConfig({
   build: {
     target: "es2022",
   },
+  // The tracking worker is a MODULE worker (same format in dev and in the production build).
+  worker: {
+    format: "es",
+  },
   test: {
     environment: "node",
     include: ["src/**/*.test.ts", "test/**/*.test.ts"],

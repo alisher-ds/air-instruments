@@ -105,7 +105,7 @@ Rule: all gesture thresholds are expressed **relative to `handSize`**, never in 
 - **Tunables:** all magic numbers live in one `config.ts`, adjustable live from the debug panel. "Copy config" button exports current values as JSON so the owner can paste good settings back to the agent.
 - **Record & replay (critical for agents):** agents cannot see the owner's camera. In the debug panel, `R` records the smoothed `HandFrame` stream to a JSON file (landmarks only, no video). Gesture logic (pinch, pluck, hit, press) must be testable by replaying these recordings in Vitest. The owner records short clips of real playing and puts them in `test/recordings/`; bugs are reproduced and fixed against them.
 - **Version pinning:** exact versions for all dependencies (no `^`), including `@mediapipe/tasks-vision`; WASM files and model loaded from URLs matching that exact version.
-- **AudioWorklet loading:** load worklet modules via Vite's `new URL('./x.ts', import.meta.url)` pattern and verify it works in `npm run build` output, not only in dev.
+- **AudioWorklet loading:** load worklet modules with Vite's `?worker&url` import (`import url from "./worklets/x.ts?worker&url"`, then `audioWorklet.addModule(url)`) and verify it works in the `npm run build` / `npm run preview` output, not only in dev. Approved by the owner. Why not `new URL('./x.ts', import.meta.url)`: it was tested and does not work in the production build (Vite inlines the raw TypeScript as a `data:` URI with the wrong MIME type, so the worklet cannot load). `?worker&url` compiles the file to a real `.js` asset and works in dev, build and preview.
 - **Deploy config:** Vite `base` set correctly for GitHub Pages subpath. Camera requires HTTPS (localhost is fine for dev).
 
 ## 6. Instruments

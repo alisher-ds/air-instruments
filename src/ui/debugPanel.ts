@@ -8,6 +8,8 @@ import { el } from "./dom";
 
 export interface DebugInfo {
   renderFps: number;
+  /** JS time of one render tick (whole rAF callback) and of its video-draw part. Rolling summary. */
+  render: { jsAvgMs: number; jsP95Ms: number; jsMaxMs: number; videoDrawAvgMs: number; dpr: number };
   tracker: TrackerStats | null;
   frame: HandFrame | null;
   audio: {
@@ -25,6 +27,8 @@ export interface DebugInfo {
 export interface DebugActions {
   toggleRecord(): void;
   beep(): void;
+  /** Called after any control changed config (and after Reset): lets main apply things like the GPU/CPU delegate. */
+  applyConfig(): void;
 }
 
 type ConfigBag = Record<string, number | boolean | string>;
@@ -39,8 +43,10 @@ export class DebugPanel {
   private readonly copyButton: HTMLButtonElement;
   private readonly refreshers: Array<() => void> = [];
   private copyTimer = 0;
+  private readonly actions: DebugActions;
 
   constructor(parent: HTMLElement, actions: DebugActions) {
+    this.actions = actions;
     this.stats = el("pre", { class: "dbg-stats" });
     this.hands = el("div", { class: "dbg-hands" });
 
@@ -57,6 +63,7 @@ export class DebugPanel {
       onclick: () => {
         resetConfig();
         this.syncTunables();
+        actions.applyConfig();
       },
     });
 
@@ -89,16 +96,29 @@ export class DebugPanel {
     if (!this.visible) return;
     const t = info.tracker;
     const lines: string[] = [];
-    lines.push(`render      ${f(info.renderFps, 0)} fps   canvas ${info.canvas.width}x${info.canvas.height}`);
+    const r = info.render;
+    lines.push(
+      `render      ${f(info.renderFps, 0)} fps   canvas ${info.canvas.width}x${info.canvas.height} @${f(r.dpr, 2)}x   JS ${f(r.jsAvgMs, 2)} ms avg | p95 ${f(r.jsP95Ms, 2)} | max ${f(r.jsMaxMs, 1)}  (video draw ${f(r.videoDrawAvgMs, 2)})`,
+    );
     if (t) {
-      lines.push(`tracking    ${f(t.trackingFps, 0)} fps   ${t.delegate}   video ${t.videoWidth}x${t.videoHeight}`);
       lines.push(
-        `inference   ${f(t.inferenceMs)} ms now | avg ${f(t.inferenceAvgMs)} | p95 ${f(t.inferenceP95Ms)} | max ${f(t.inferenceMaxMs)}`,
+        `tracking    ${f(t.trackingFps, 0)} fps   (camera ${f(t.cameraFps, 0)} fps, ${f(t.droppedPercent, 0)}% not sent: worker busy)`,
+      );
+      lines.push(`worker      ${t.workerState}   delegate ${t.delegate}   video ${t.videoWidth}x${t.videoHeight}`);
+      if (t.fallbackReason) lines.push(`            ! ${t.fallbackReason}`);
+      lines.push(
+        `inference   ${f(t.inferenceMs)} ms now | avg ${f(t.inferenceAvgMs)} | p95 ${f(t.inferenceP95Ms)} | max ${f(t.inferenceMaxMs)}   (measured in the worker)`,
       );
       lines.push(
-        `  session   hands in view: ${f(t.avgWithHandsMs)} ms (${t.framesWithHands} fr) | no hands: ${f(t.avgNoHandsMs)} ms (${t.framesNoHands} fr)`,
+        `frame age   ${f(t.frameAgeMs, 0)} ms now | avg ${f(t.frameAgeAvgMs, 0)} | p95 ${f(t.frameAgeP95Ms, 0)}   (camera capture -> landmarks on main thread)`,
       );
-      lines.push(`  frames    ${t.usesVideoFrameCallback ? "per camera frame (requestVideoFrameCallback)" : "per camera frame (rAF fallback)"}`);
+      if (!t.frameAgeFromCapture && t.framesWithHands + t.framesNoHands > 0) {
+        lines.push("            ! browser gave no capture time: age is too small by the camera delay");
+      }
+      lines.push(`  parts     grab ${f(t.grabAvgMs)} ms | worker round trip ${f(t.roundTripAvgMs)} ms`);
+      lines.push(
+        `  session   hands in view: ${f(t.avgWithHandsMs)} ms (${t.framesWithHands} fr) | no hands: ${f(t.avgNoHandsMs)} ms (${t.framesNoHands} fr)${t.watchdogTimeouts ? `  watchdog ${t.watchdogTimeouts}x` : ""}`,
+      );
     } else {
       lines.push("tracking    not started");
     }
@@ -169,6 +189,7 @@ export class DebugPanel {
         input.addEventListener("input", () => {
           cfg[key] = Number(input.value);
           sync();
+          this.actions.applyConfig();
         });
         this.refreshers.push(sync);
         sync();
@@ -182,6 +203,7 @@ export class DebugPanel {
         };
         input.addEventListener("change", () => {
           cfg[key] = input.checked;
+          this.actions.applyConfig();
         });
         this.refreshers.push(sync);
         sync();
@@ -194,6 +216,7 @@ export class DebugPanel {
         };
         select.addEventListener("change", () => {
           cfg[key] = select.value;
+          this.actions.applyConfig();
         });
         this.refreshers.push(sync);
         sync();

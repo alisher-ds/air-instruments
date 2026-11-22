@@ -30,11 +30,29 @@ export interface Config {
   /** Bend angle (radians) at the middle joint that counts as curl = 1. */
   curlFullBendRad: number;
 
+  // --- tracking worker ---
+  /** MediaPipe delegate. Switching it live reloads the model inside the worker (a second or two). */
+  delegate: "GPU" | "CPU";
+  /**
+   * When the worker finishes a frame and a newer camera frame arrived meanwhile, send that newest frame
+   * right away (older ones are dropped, there is never a queue). Off = wait for the next camera frame.
+   */
+  pickupOnFree: boolean;
+
+  // --- predictive triggering (groundwork, OFF by default, no instrument uses it yet) ---
+  predictEnabled: boolean;
+  /** How far ahead (ms) a fingertip is extrapolated from its velocity. ~1 camera frame = 33 ms. */
+  predictLeadMs: number;
+  /** The extrapolated shift is never longer than this, as a fraction of handSize (so a glitchy velocity cannot fling a point). */
+  predictMaxShift: number;
+
   // --- rendering ---
   /** 0..1 black overlay on the video so light effects pop. */
   videoDim: number;
   showHands: boolean;
   videoFit: "cover" | "contain";
+  /** Upper limit for devicePixelRatio (hard cap 2). Lower = fewer pixels to fill = faster render. */
+  maxDpr: number;
 
   // --- recording ---
   recordMaxSeconds: number;
@@ -55,9 +73,17 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   velocityAlpha: 0.6,
   curlFullBendRad: 2.2,
 
+  delegate: "GPU",
+  pickupOnFree: true,
+
+  predictEnabled: false,
+  predictLeadMs: 33,
+  predictMaxShift: 0.5,
+
   videoDim: 0.5,
   showHands: false,
   videoFit: "cover",
+  maxDpr: 2,
 
   recordMaxSeconds: 60,
 });
@@ -95,6 +121,8 @@ export type Tunable = NumberTunable | BooleanTunable | ChoiceTunable;
 
 /** What the debug panel shows as live controls. */
 export const TUNABLES: Tunable[] = [
+  { kind: "choice", group: "Tracking", key: "delegate", label: "delegate (GPU/CPU)", options: ["GPU", "CPU"] },
+  { kind: "boolean", group: "Tracking", key: "pickupOnFree", label: "grab newest when free" },
   { kind: "number", group: "Smoothing", key: "minCutoff", label: "minCutoff", min: 0.1, max: 10, step: 0.1 },
   { kind: "number", group: "Smoothing", key: "beta", label: "beta", min: 0, max: 50, step: 0.5 },
   { kind: "number", group: "Smoothing", key: "dCutoff", label: "dCutoff", min: 0.1, max: 10, step: 0.1 },
@@ -107,6 +135,10 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "View", key: "videoDim", label: "video dim", min: 0, max: 1, step: 0.05 },
   { kind: "boolean", group: "View", key: "showHands", label: "show hands" },
   { kind: "choice", group: "View", key: "videoFit", label: "video fit", options: ["cover", "contain"] },
+  { kind: "number", group: "View", key: "maxDpr", label: "max pixel ratio", min: 1, max: 2, step: 0.25 },
+  { kind: "boolean", group: "Prediction", key: "predictEnabled", label: "predict (not used yet)" },
+  { kind: "number", group: "Prediction", key: "predictLeadMs", label: "lead (ms)", min: 0, max: 100, step: 1 },
+  { kind: "number", group: "Prediction", key: "predictMaxShift", label: "max shift (x handSize)", min: 0.05, max: 1, step: 0.05 },
 ];
 
 // ---------------------------------------------------------------------------
@@ -114,6 +146,14 @@ export const TUNABLES: Tunable[] = [
 // ---------------------------------------------------------------------------
 
 export const CAMERA = { width: 640, height: 480 } as const;
+
+/** Hard upper limit for devicePixelRatio (PLAN.md section 5). */
+export const MAX_DPR_CAP = 2;
+
+/**
+ * The only official HandLandmarker model Google publishes (checked: float16/1 and float16/latest exist, float32 and
+ * int8 return 404). So there is no model variant to switch between; the delegate is the only speed switch.
+ */
 
 /** Number of hands MediaPipe is asked to find. */
 export const NUM_HANDS = 2;
