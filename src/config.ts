@@ -129,10 +129,10 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   videoFit: "cover",
   videoMode: "element",
   maxDpr: 2,
-  renderScale: 0.75,
+  renderScale: 1,
   software2d: false,
   testLoad: false,
-  renderFpsCap: 0,
+  renderFpsCap: 30,
 
   recordMaxSeconds: 60,
 });

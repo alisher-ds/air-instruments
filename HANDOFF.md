@@ -1,6 +1,29 @@
 # HANDOFF
 
-Current state: **Stage 0.7 finished** (2026-11-23): cut the render GPU cost. Stage 0.5 (tracking in a Web Worker) and 0.6 (test bench) stay. The owner proved with his own numbers that the render steals GPU time from MediaPipe (render 60 fps uncapped: inference ~102 ms; render capped at 20 fps: ~62 ms). This stage makes the render much cheaper and adds a one-click "Compare render settings" table. **I could NOT measure the effect: the only browser I have is a throttled window (render ~1 fps there), so the owner's table decides the default.** Next: the owner sends the table (see "Next step"), then Stage 1 (harp).
+Current state: **Stage 0.7 finished** (2026-11-23): cut the render GPU cost. Stage 0.5 (tracking in a Web Worker) and 0.6 (test bench) stay. The owner proved with his own numbers that the render steals GPU time from MediaPipe (render 60 fps uncapped: inference ~102 ms; render capped at 20 fps: ~62 ms). This stage makes the render much cheaper and adds a one-click "Compare render settings" table. **Owner's table is in (see "Owner's result" below): the video element and the render scale did NOT help; only a lower render FRAME RATE helped. Goal (inference <= 45 ms) is NOT reached.** Defaults changed to render cap 30, scale 1. Next: one more measurement (see "Next step"), then Stage 1 (harp).
+
+## Stage 0.7 — owner's result (Intel Iris Xe, window 1920x970, dpr 1.0, worker + GPU, both hands, synthetic harp-like load ON)
+
+```
+case                                      render fps | inference avg / p95 | tracking fps | frame age avg / p95
+1. old: video in canvas, 1.0, no cap         59.3    | 132.6 / 134.6       | 7.5          | 158 / 218
+2. new: video element, 1.0                   58.8    | 137.3 / 164.7       | 7.2          | 187 / 218
+3. video element, 0.75                       59.3    | 134.4 / 148.9       | 7.4          | 183 / 218
+4. video element, 0.5                        59.5    | 133.8 / 147.8       | 7.4          | 178 / 220
+5. video element, 0.5, cap 30                29.9    |  91.7 / 122.8       | 10.7         | 145 / 187
+6. EXPERIMENT: element, 1.0, 2D software     59.3    | 134.0 / 148.3       | 7.4          | 185 / 214
+```
+Live panel line at the same time (cap 20, scale 0.75, NO synthetic load): inference avg 61 (p95 102), tracking 16 fps, frame age avg 95; **"hands in view: 87.1 ms (52 fr) | no hands: 38.1 ms (59 fr)"**.
+
+What this means (my reading, not proven beyond the rows):
+- **Rows 1-4 and 6 are the same within noise.** Moving the video out of the canvas, rendering at 0.75 or 0.5 (4x fewer pixels) and CPU 2D drawing all changed nothing. So the cost is **not pixel fill and not the video draw**. The only thing that moved inference is the **number of rendered frames per second** (row 5: 60 -> 30 fps: 134 -> 92 ms, tracking 7.4 -> 10.7 fps). Working hypothesis (NOT tested): every rendered frame sends GPU work through the same GPU process / GPU queue as MediaPipe's long WebGL batches, so the cost is per frame (scheduling/flush), not per pixel.
+- **The earlier "38-40 ms" and "62 ms" numbers were probably MIXED with no-hands frames.** The panel shows no-hands 38 ms vs hands 87 ms even at a 20 fps render with no heavy load: with hands MediaPipe runs the hand-landmark model for each hand (x2) on top, no-hands only runs the palm detector. So with two hands the realistic floor on this GPU may be ~80-90 ms whatever the render does. **If so, "inference <= 45 ms with two hands" cannot be reached by render changes at all** and needs a different lever (numHands 1, infer every 2 + prediction, lower camera size, or accepting ~90 ms and hiding it with prediction/draw-ahead). This is the next thing to find out.
+- The synthetic load is heavy (it pushed inference from ~87 to ~134 ms at 60 fps vs the live no-load panel), so rows are pessimistic compared with the real harp; the relative differences are what counts.
+- Row 6: software 2D gives no gain. **Drop it** (left as a hidden test toggle, off).
+- **Defaults changed in this follow-up:** `renderFpsCap` 0 -> **30** (the only thing that helped; PLAN allows "a stable 30 if 60 is impossible") and `renderScale` 0.75 -> **1** (no measured gain, so no reason to soften the picture). The owner's browser still has his own saved settings (cap 20, scale 0.75) in localStorage; press Reset in the panel or change the sliders to take the new defaults.
+- **PLAN.md proposal (NOT applied, owner decides):** the new section 5 bullet says (1) video element and (2) reduced-resolution effects are how to keep render cheap. The measurement does not support that on this laptop; what is supported is "render frames per second cost tracking time, cap the render at 30". Suggest rewording the rule to: "render must stay cheap: cap render fps (30) and keep the per-frame GPU command count low; reduced resolution did not help on Intel Iris Xe".
+
+
 
 ## Stage 0.7 — what changed
 
@@ -157,12 +180,9 @@ A bigger change I did **not** make (it touches the Stage 6 "record canvas" plan)
 
 ## Next step (exact)
 
-1. **Owner starts the app (worker + GPU, tracking mode as it was), presses D, presses "Compare render settings"**, stands back and keeps BOTH hands in view and moving a little for ~1.5 minutes (countdown first), then presses **Copy report** and pastes it to the agent. Tracking mode/delegate must stay at worker + GPU for the table to match his earlier numbers.
-2. Agent reads the table (rows with "TOO FEW" are not trusted; ask for a re-run if hands were missing). Goal: inference avg <= 45 ms and frame age avg <= 70 ms at render 60 fps (or a stable 30). Then:
-   - set `renderScale` / `renderFpsCap` in `DEFAULT_CONFIG` to the best row that still looks good (provisional default today: scale 0.75, cap 0);
-   - keep `software2d` only if row 6 clearly beats row 2 (otherwise leave it as a hidden test toggle or remove it);
-   - if row 2 is not much better than row 1 the video-element change did not help the GPU: then look at the remaining cost (compositing two layers, the synthetic load itself) before Stage 1.
-   - If no row reaches the goal: next ideas are the "auto" idea above, `numHands` 1 for one-hand instruments, `infer every 2`, and a lower camera size.
+1. **Find the floor (no code needed).** Owner, panel open (D), both hands in view, render fps cap **5** (slider), synthetic load OFF, **Reset numbers**, wait 15 s, **Copy report**: the line "session hands in view: X ms" is MediaPipe with two hands and almost no render. Repeat with **numHands 1** (one hand in view) and with cap 30. If the floor with two hands is ~85 ms, render is NOT the main cost any more and the goal needs another lever.
+2. Agent then decides: if floor ~ cap-30 row (~90 ms): keep cap 30, stop tuning render, and work on hiding latency (draw-ahead exists; `predictedTip` for the harp; `numHands` 1 where an instrument allows it; `infer every 2` is likely worse for frame age). If floor is much lower (< 60 ms): the per-frame GPU command count matters; look at what a rendered frame sends to the GPU (compositor layers, canvas flush) and try cap 20 / fewer layers.
+   - Possibly extend "Compare render settings" with cap 20 and cap 10 rows and a no-load variant.
 3. Then **Stage 1: Harp** (strings, pluck detection, Karplus-Strong worklet in `src/audio/worklets/ks-string.ts` loaded with `?worker&url`, scales; add render-side interpolation; use `predictedTip` for pluck detection).
 
 ## Tunables the owner should test (debug panel, key D)
