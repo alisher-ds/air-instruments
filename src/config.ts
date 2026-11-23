@@ -111,6 +111,10 @@ export interface Config {
   harpPinchLockoutMs: number;
   /** Flicking a grabbed string faster than this (hand sizes/s) toward a screen edge deletes it. */
   harpFlickSpeed: number;
+  /** A pinch must be held this long before it can make a string (touching thumb and index while playing makes nothing). ms. */
+  harpMinPinchMs: number;
+  /** A hand whose middle, ring and pinky are bent more than this (0..1, average) is a fist: its thumb-index touch is not a pinch. */
+  harpFistCurl: number;
   /** Both open palms held still this long clear all strings. ms. */
   harpClearHoldMs: number;
 
@@ -163,12 +167,14 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   harpMinLenFrac: 0.08,
   harpMaxLenFrac: 0.6,
   harpMinStringHands: 1.5,
-  harpGrabDist: 0.5,
+  harpGrabDist: 0.75,
   harpCooldownMs: 60,
   harpPluckMinSpeed: 0.4,
   harpPluckFullSpeed: 6,
   harpPinchLockoutMs: 250,
-  harpFlickSpeed: 6,
+  harpFlickSpeed: 9,
+  harpMinPinchMs: 150,
+  harpFistCurl: 0.7,
   harpClearHoldMs: 1500,
 
   recordMaxSeconds: 60,
@@ -242,6 +248,8 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "Harp", key: "harpPluckFullSpeed", label: "pluck full-strength speed (hands/s)", min: 1, max: 15, step: 0.5 },
   { kind: "number", group: "Harp", key: "harpPinchLockoutMs", label: "no pluck after pinch (ms)", min: 0, max: 800, step: 10 },
   { kind: "number", group: "Harp", key: "harpFlickSpeed", label: "flick-delete speed (hands/s)", min: 2, max: 20, step: 0.5 },
+  { kind: "number", group: "Harp", key: "harpMinPinchMs", label: "pinch held at least (ms)", min: 0, max: 600, step: 10 },
+  { kind: "number", group: "Harp", key: "harpFistCurl", label: "fist = other fingers bent more than", min: 0.3, max: 1, step: 0.05 },
   { kind: "number", group: "Harp", key: "harpClearHoldMs", label: "clear-all hold (ms)", min: 500, max: 4000, step: 100 },
   { kind: "boolean", group: "Draw lag fix", key: "drawLeadEnabled", label: "draw skeleton ahead (by frame age)" },
   { kind: "number", group: "Draw lag fix", key: "drawLeadMaxMs", label: "max lead (ms)", min: 0, max: 300, step: 10 },

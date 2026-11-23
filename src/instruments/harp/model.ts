@@ -34,6 +34,8 @@ export interface HarpConfig extends PredictConfig {
   harpPluckFullSpeed: number;
   harpPinchLockoutMs: number;
   harpFlickSpeed: number;
+  harpMinPinchMs: number;
+  harpFistCurl: number;
   harpClearHoldMs: number;
 }
 
@@ -81,6 +83,8 @@ interface HandState {
   pinching: boolean;
   /** Time the last pinch ended (frame time), for the lockout. */
   pinchEndedAt: number;
+  /** Time the current pinch began (frame time). */
+  pinchStartedAt: number;
   /** Pinch point of the last frame in which the pinch was on. */
   lastPoint: Vec2;
   handSize: number;
@@ -102,6 +106,7 @@ function newState(): HandState {
     prevT: 0,
     pinching: false,
     pinchEndedAt: -Infinity,
+    pinchStartedAt: 0,
     lastPoint: { x: 0, y: 0 },
     handSize: 100,
     grabId: -1,
@@ -112,15 +117,22 @@ function newState(): HandState {
   };
 }
 
-/** Where the pinch point is heading: true if a fast pinch would reach (or be near) a screen edge soon. Pure, tested. */
+/** Where the pinch point is heading: true if a fast pinch would leave the screen within 0.4 s. Pure, tested. */
 export function isFlickToEdge(point: Vec2, velocity: Vec2, handSize: number, w: number, h: number, minSpeedHands: number): boolean {
   const speed = Math.hypot(velocity.x, velocity.y);
   if (!(handSize > 0) || speed < minSpeedHands * handSize) return false;
   const reach = 0.4; // seconds ahead
   const x = point.x + velocity.x * reach;
   const y = point.y + velocity.y * reach;
-  const margin = 0.05 * Math.min(w, h);
-  return x < margin || y < margin || x > w - margin || y > h - margin;
+  return x < 0 || y < 0 || x > w || y > h; // it must really leave the screen: a fast move near an edge is not a delete
+}
+
+/**
+ * A closed fist (middle, ring and pinky bent): the thumb and index touch while a hand closes or opens, which is NOT a
+ * pinch for the harp. A real pinch keeps the other fingers at least partly open.
+ */
+export function isFist(hand: Hand, maxCurl: number): boolean {
+  return (hand.fingerCurl[2]! + hand.fingerCurl[3]! + hand.fingerCurl[4]!) / 3 > maxCurl;
 }
 
 /** Is `hand` showing an open, still palm? (clear-all gesture) */
@@ -322,7 +334,7 @@ export class HarpModel {
       }
       st.handSize = hand.handSize;
       const pinchNow = hand.pinch.active;
-      if (pinchNow && !st.pinching) this.beginPinch(hand, st, events);
+      if (pinchNow && !st.pinching) this.beginPinch(hand, st, now, events);
       else if (!pinchNow && st.pinching) this.endPinch(st, now, events, false);
       else if (pinchNow) this.holdPinch(hand, st, now);
       st.pinching = pinchNow;
@@ -350,9 +362,14 @@ export class HarpModel {
     return best;
   }
 
-  private beginPinch(hand: Hand, st: HandState, events: HarpEvent[]): void {
+  private beginPinch(hand: Hand, st: HandState, now: number, events: HarpEvent[]): void {
     const p = hand.pinch.point;
     st.lastPoint = p;
+    st.pinchStartedAt = now;
+    if (isFist(hand, this.cfg.harpFistCurl)) {
+      st.mode = "ignored"; // a closing fist, not a pinch
+      return;
+    }
     const hit = this.findGrab(p, hand.handSize);
     if (hit) {
       st.mode = "grab";
@@ -380,6 +397,16 @@ export class HarpModel {
   }
 
   private holdPinch(hand: Hand, st: HandState, now: number): void {
+    if (st.mode === "create" && isFist(hand, this.cfg.harpFistCurl)) {
+      // The hand closed into a fist while "creating": that was no pinch. Cancel and free the partner.
+      if (st.partner >= 0) {
+        const partner = this.hands.get(st.partner);
+        if (partner) partner.partner = -1;
+      }
+      st.mode = "ignored";
+      st.partner = -1;
+      return;
+    }
     if (st.mode !== "grab") return;
     const s = this.stringById(st.grabId);
     if (!s) {
@@ -422,7 +449,9 @@ export class HarpModel {
         partner.mode = "ignored"; // the other hand's pinch is used up: it must open before it can do anything
         partner.partner = -1;
       }
-      if (dist(a, b) >= this.cfg.harpMinStringHands * size) {
+      // Held long enough (a quick touch of thumb and index while playing makes nothing) and long enough in space.
+      const heldMs = Math.min(now - st.pinchStartedAt, partner && partner.pinching ? now - partner.pinchStartedAt : Infinity);
+      if (heldMs >= this.cfg.harpMinPinchMs && dist(a, b) >= this.cfg.harpMinStringHands * size) {
         const s = this.addString(a, b);
         if (s) events.push({ type: "created", id: s.id });
       }

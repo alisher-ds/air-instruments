@@ -15,6 +15,20 @@ interface Spec {
   y: number;
   /** 1 = open, 0 = pinching. */
   open?: number;
+  /** Middle, ring and pinky folded into the palm (a closed fist; the thumb-index touch is then no real pinch). */
+  fist?: boolean;
+}
+
+/** synthHand with the middle, ring and pinky folded: each tip comes back down past its middle joint (bend ~ 180 degrees). */
+function withFist(pts: Array<{ x: number; y: number }>): Array<{ x: number; y: number }> {
+  const out = pts.map((p) => ({ ...p }));
+  for (const mcp of [9, 13, 17]) {
+    const base = pts[mcp]!;
+    out[mcp + 1] = { x: base.x, y: base.y - 40 };
+    out[mcp + 2] = { x: base.x, y: base.y - 30 };
+    out[mcp + 3] = { x: base.x, y: base.y - 5 };
+  }
+  return out;
 }
 
 /** Index finger tip relative to the wrist for synthHand scale 1 (see test/helpers/synthHand.ts). */
@@ -39,7 +53,10 @@ class Rig {
   step(hands: Spec[], dtMs = 33): HarpEvent[] {
     this.t += dtMs;
     const frame = this.analyzer.analyze(
-      hands.map((h) => ({ id: h.id, landmarks: synthHand({ x: h.x, y: h.y, open: h.open ?? 1 }) })),
+      hands.map((h) => {
+        const lm = synthHand({ x: h.x, y: h.y, open: h.open ?? 1 });
+        return { id: h.id, landmarks: h.fist ? withFist(lm) : lm };
+      }),
       this.t,
       W,
     );
@@ -237,7 +254,7 @@ describe("creating strings", () => {
     ]);
     const a2 = wristFor(260, 280);
     const b2 = wristFor(900, 400);
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 8; i++) {
       rig.step([
         { id: 1, ...a2, open: 0 },
         { id: 2, ...b2, open: 0 },
@@ -255,6 +272,31 @@ describe("creating strings", () => {
     // The hand still pinching has used its pinch up: it does not start anything on its own.
     for (let i = 0; i < 3; i++) rig.step([{ id: 2, ...b2, open: 0 }, { id: 1, ...a2, open: 1 }]);
     expect(rig.model.strings).toHaveLength(1);
+  });
+
+  it("a quick touch of thumb and index (shorter than the minimum hold) makes nothing, even if the hand moved far", () => {
+    const rig = new Rig();
+    rig.step([{ id: 1, ...wristFor(200, 300), open: 1 }]);
+    rig.step([{ id: 1, ...wristFor(200, 300), open: 0 }]);
+    rig.step([{ id: 1, ...wristFor(500, 300), open: 0 }]); // 300 px in one frame
+    rig.step([{ id: 1, ...wristFor(500, 300), open: 1 }]);
+    expect(rig.model.strings).toHaveLength(0);
+  });
+
+  it("a closing fist (thumb touches index, other fingers folded) is not a pinch: no string, no grab", () => {
+    const rig = new Rig();
+    const s = rig.model.addString({ x: 400, y: 200 }, { x: 400, y: 600 })!;
+    rig.step([{ id: 1, ...wristFor(300, 300), open: 1 }]);
+    for (let i = 0; i < 10; i++) rig.step([{ id: 1, ...wristFor(300 + i * 30, 300), open: 0, fist: true }]);
+    rig.step([{ id: 1, ...wristFor(600, 300), open: 1 }]);
+    expect(rig.model.strings).toHaveLength(1);
+    expect(rig.model.strings[0]!.id).toBe(s.id);
+    // ...and the same motion with an open pinch DOES make a string (so the test is not vacuous)
+    const rig2 = new Rig();
+    rig2.step([{ id: 1, ...wristFor(300, 300), open: 1 }]);
+    for (let i = 0; i < 10; i++) rig2.step([{ id: 1, ...wristFor(300 + i * 30, 300), open: 0 }]);
+    rig2.step([{ id: 1, ...wristFor(600, 300), open: 1 }]);
+    expect(rig2.model.strings).toHaveLength(1);
   });
 
   it("losing the hand while creating cancels the string", () => {
@@ -316,6 +358,15 @@ describe("grab, move, flick, undo", () => {
     expect(rig.model.grabbed.size).toBe(0);
   });
 
+  it("a pinch 0.7 hand sizes from a string still grabs it (aiming is imprecise and the hand image is ~100 ms old)", () => {
+    const { rig, s } = grabRig();
+    const p0 = wristFor(470, 400); // 70 px = 0.7 hand sizes from the string
+    rig.step([{ id: 1, ...p0, open: 1 }]);
+    rig.step([{ id: 1, ...p0, open: 0 }]);
+    expect(rig.model.grabbed.has(s.id)).toBe(true);
+    expect(rig.model.strings).toHaveLength(1);
+  });
+
   it("grabbing does not create a new string, and pinching far away does", () => {
     const { rig } = grabRig();
     const far = wristFor(900, 400);
@@ -338,6 +389,16 @@ describe("grab, move, flick, undo", () => {
     expect(rig.model.strings).toHaveLength(1);
     expect(rig.model.strings[0]!.a.x).toBeCloseTo(400, 0);
     expect(rig.model.strings[0]!.id).toBe(s.id);
+  });
+
+  it("a quick move that is still faster than a normal drag but slower than a flick does not delete", () => {
+    const { rig } = grabRig();
+    const p0 = wristFor(420, 400);
+    rig.step([{ id: 1, ...p0, open: 1 }]);
+    rig.step([{ id: 1, ...p0, open: 0 }]);
+    for (let i = 1; i <= 8; i++) rig.step([{ id: 1, ...wristFor(420 + i * 22, 400), open: 0 }]); // 22 px / 33 ms = 6.7 hand sizes/s
+    rig.step([{ id: 1, ...wristFor(600, 400), open: 1 }]);
+    expect(rig.model.strings).toHaveLength(1);
   });
 
   it("a slow drag to the edge does not delete", () => {
@@ -425,10 +486,12 @@ describe("clear all: both open palms held still", () => {
 describe("isFlickToEdge", () => {
   it("needs speed AND a heading toward an edge", () => {
     const hs = 100;
-    expect(isFlickToEdge({ x: 640, y: 360 }, { x: 2000, y: 0 }, hs, W, H, 6)).toBe(true); // fast, heading right: 800 px ahead
-    expect(isFlickToEdge({ x: 640, y: 360 }, { x: 200, y: 0 }, hs, W, H, 6)).toBe(false); // slow
-    expect(isFlickToEdge({ x: 640, y: 360 }, { x: 650, y: 0 }, hs, W, H, 6)).toBe(false); // fast enough but ends mid-screen
-    expect(isFlickToEdge({ x: 1200, y: 360 }, { x: 700, y: 0 }, hs, W, H, 6)).toBe(true); // already near the right edge
-    expect(isFlickToEdge({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, W, H, 6)).toBe(false);
+    expect(isFlickToEdge({ x: 640, y: 360 }, { x: 2000, y: 0 }, hs, W, H, 9)).toBe(true); // fast, heading right: 800 px ahead leaves the screen
+    expect(isFlickToEdge({ x: 640, y: 360 }, { x: 200, y: 0 }, hs, W, H, 9)).toBe(false); // slow
+    expect(isFlickToEdge({ x: 640, y: 360 }, { x: 950, y: 0 }, hs, W, H, 9)).toBe(false); // fast enough but ends mid-screen
+    expect(isFlickToEdge({ x: 1200, y: 360 }, { x: 1000, y: 0 }, hs, W, H, 9)).toBe(true); // near the right edge and heading out
+    expect(isFlickToEdge({ x: 1200, y: 360 }, { x: 800, y: 0 }, hs, W, H, 9)).toBe(false); // too slow, even near the edge
+    expect(isFlickToEdge({ x: 1250, y: 360 }, { x: -1500, y: 0 }, hs, W, H, 9)).toBe(false); // fast, but heading away from that edge
+    expect(isFlickToEdge({ x: 0, y: 0 }, { x: 0, y: 0 }, 0, W, H, 9)).toBe(false);
   });
 });
