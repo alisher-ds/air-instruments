@@ -10,6 +10,7 @@
 
 import { config } from "../config";
 import { fitTransform, type FitTransform } from "../core/geometry";
+import { lookFilter, lookParams } from "./look";
 import { backingSize, renderRatios } from "./renderScale";
 
 const BG = "#05060a";
@@ -107,14 +108,17 @@ export class Renderer {
   private syncVideoLayer(video: HTMLVideoElement | null): void {
     if (!video) return;
     const layer = config.videoMode === "element";
-    const dim = Math.min(1, Math.max(0, config.videoDim));
-    const key = `${layer}|${config.videoFit}|${dim}`;
+    const look = lookParams(config.videoLook, config.videoDim);
+    const dim = look.dim;
+    const filter = lookFilter(look);
+    const key = `${layer}|${config.videoFit}|${dim}|${filter}`;
     if (key === this.layerKey && video === this.layerVideo) return;
     this.layerKey = key;
     this.layerVideo = video;
     video.classList.toggle("layer", layer);
     video.classList.toggle("contain", layer && config.videoFit === "contain");
     video.style.setProperty("--cam-opacity", String(1 - dim));
+    video.style.filter = filter === "none" ? "" : filter;
   }
 
   /** Start of a frame. Element mode: just clear the transparent canvas. Canvas mode (old): draw the mirrored dimmed video. */
@@ -138,7 +142,8 @@ export class Renderer {
     ctx.globalAlpha = 1;
 
     const hasVideo = video !== null && video.videoWidth > 0 && video.readyState >= 2;
-    const dim = Math.min(1, Math.max(0, config.videoDim));
+    const look = lookParams(config.videoLook, config.videoDim);
+    const dim = look.dim;
     const fit = hasVideo ? this.fitFor(video) : null;
     const covers =
       fit !== null && fit.offsetX <= 0.5 && fit.offsetY <= 0.5 && fit.drawWidth >= this.width - 1 && fit.drawHeight >= this.height - 1;
@@ -156,8 +161,9 @@ export class Renderer {
       ctx.scale(-1, 1);
       // Video at (1 - dim) opacity over the background == the old "draw video, then a dark overlay" in one pass.
       ctx.globalAlpha = 1 - dim;
+      ctx.filter = lookFilter(look);
       ctx.drawImage(video, 0, 0, fit.drawWidth, fit.drawHeight);
-      ctx.restore();
+      ctx.restore(); // also puts the filter back to none
       ctx.globalAlpha = 1;
     }
     this.lastBeginMs = performance.now() - t0;
@@ -237,7 +243,9 @@ export class Renderer {
       target.save();
       target.translate(fit.offsetX + fit.drawWidth, fit.offsetY);
       target.scale(-1, 1);
-      target.globalAlpha = 1 - Math.min(1, Math.max(0, config.videoDim));
+      const look = lookParams(config.videoLook, config.videoDim);
+      target.globalAlpha = 1 - look.dim;
+      target.filter = lookFilter(look);
       target.drawImage(video, 0, 0, fit.drawWidth, fit.drawHeight);
       target.restore();
     }

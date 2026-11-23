@@ -23,6 +23,7 @@ import { dist, fitTransform, normalizedToCanvas } from "./geometry";
 import { FrameGate } from "./frameGate";
 import { HandAnalyzer } from "./gestures";
 import { RollingStats } from "./rollingStats";
+import { trackingBitmapSize } from "./trackingSize";
 import { LandmarkSmoother } from "./smoothing";
 import { unpackHands, type DelegateName, type FromWorker, type InitMessage, type ToWorker } from "./trackerProtocol";
 
@@ -831,7 +832,8 @@ export class HandTracker {
     const epoch = this.epoch;
     const seq = ++this.seq;
     const t0 = performance.now();
-    createImageBitmap(this.video).then(
+    const shrink = trackingBitmapSize(this.video.videoWidth, this.video.videoHeight);
+    (shrink ? createImageBitmap(this.video, shrink) : createImageBitmap(this.video)).then(
       (bitmap) => {
         if (epoch !== this.epoch || !this.running) {
           bitmap.close();

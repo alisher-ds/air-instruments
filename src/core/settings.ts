@@ -16,6 +16,7 @@ export const SAVED_KEYS: ReadonlyArray<keyof Config & string> = [
   "cameraRes",
   "maxDpr",
   "videoMode",
+  "videoLook",
   "renderScale",
   "software2d",
   "renderFpsCap",

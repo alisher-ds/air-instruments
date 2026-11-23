@@ -516,3 +516,11 @@ canvas#overlay {
     max-width: 92vw;
   }
 }
+
+/* Narrow windows: the tools would touch the instrument buttons, so they move to the bottom right. */
+@media (max-width: 1180px) {
+  .tools {
+    top: auto;
+    bottom: 14px;
+  }
+}

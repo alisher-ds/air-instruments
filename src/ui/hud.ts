@@ -13,6 +13,10 @@ export interface HudTools {
   onFullscreen(): void;
   /** Starts / stops recording the performance to a video file. */
   onRecordVideo(): void;
+  /** Next picture look (Soft / Clear / Bright). */
+  onLook(): void;
+  /** HD camera on / off. */
+  onHd(): void;
 }
 
 export class Hud {
@@ -23,6 +27,8 @@ export class Hud {
   private readonly notice: HTMLElement;
   private readonly noticeText: HTMLElement;
   private readonly videoButton: HTMLButtonElement;
+  private readonly lookButton: HTMLButtonElement;
+  private readonly hdButton: HTMLButtonElement;
   private hintTimer = 0;
   private noticeShown = "";
 
@@ -59,11 +65,25 @@ export class Hud {
       title: "Record your performance (picture + sound) to a video file you can share (V)",
       onclick: () => tools.onRecordVideo(),
     });
+    this.lookButton = el("button", {
+      class: "btn btn-small tool",
+      textContent: "Look: Clear",
+      title: "How the camera picture looks: Soft (dim), Clear, Bright",
+      onclick: () => tools.onLook(),
+    });
+    this.hdButton = el("button", {
+      class: "btn btn-small tool",
+      textContent: "HD",
+      title: "Sharper camera picture (1280x720). Needs a camera that supports it; tracking speed stays the same.",
+      onclick: () => tools.onHd(),
+    });
     const tool = (text: string, title: string, onclick: () => void) => el("button", { class: "btn btn-small tool", textContent: text, title, onclick });
     const toolbar = el(
       "div",
       { class: "tools" },
       this.videoButton,
+      this.lookButton,
+      this.hdButton,
       tool("?", "How to play this instrument (?)", () => tools.onHelp()),
       tool("⛶", "Fullscreen (F)", () => tools.onFullscreen()),
     );
@@ -118,6 +138,17 @@ export class Hud {
   setRecording(active: boolean, seconds: number): void {
     this.rec.classList.toggle("hidden", !active);
     if (active) this.rec.textContent = `● REC ${seconds.toFixed(1)}s  (press R to stop and save)`;
+  }
+
+  /** The Look button text, e.g. "Clear". */
+  setLook(label: string): void {
+    this.lookButton.textContent = `Look: ${label}`;
+  }
+
+  /** The HD button is lit while the HD camera is on. */
+  setHd(on: boolean): void {
+    this.hdButton.classList.toggle("btn-accent", on);
+    this.hdButton.textContent = on ? "HD ✓" : "HD";
   }
 
   /** The video recording button: "● Record" or "■ Stop 0:07". */

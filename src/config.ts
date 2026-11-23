@@ -3,6 +3,7 @@
 
 import pkg from "../package.json";
 import type { ScaleName } from "./audio/scales";
+import type { Look } from "./render/look";
 
 export interface Config {
   // --- smoothing (One Euro filter, applied to every landmark) ---
@@ -71,6 +72,8 @@ export interface Config {
   // --- rendering ---
   /** 0..1 black overlay on the video so light effects pop. */
   videoDim: number;
+  /** How the camera picture looks: soft (old, dimmed), clear (default), bright, custom (only `videoDim`). */
+  videoLook: Look;
   showHands: boolean;
   videoFit: "cover" | "contain";
   /**
@@ -231,6 +234,7 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   drawLeadMaxShift: 0.5,
 
   videoDim: 0.5,
+  videoLook: "clear",
   showHands: false,
   videoFit: "cover",
   videoMode: "element",
@@ -341,7 +345,8 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "Hands", key: "matchMaxDist", label: "id match distance", min: 0.05, max: 0.8, step: 0.01 },
   { kind: "number", group: "Gestures", key: "velocityAlpha", label: "velocity alpha", min: 0.05, max: 1, step: 0.05 },
   { kind: "number", group: "Gestures", key: "curlFullBendRad", label: "curl full bend (rad)", min: 1, max: 3.14, step: 0.05 },
-  { kind: "number", group: "View", key: "videoDim", label: "video dim", min: 0, max: 1, step: 0.05 },
+  { kind: "choice", group: "View", key: "videoLook", label: "picture look", options: ["soft", "clear", "bright", "custom"] },
+  { kind: "number", group: "View", key: "videoDim", label: "video dim (look = custom only)", min: 0, max: 1, step: 0.05 },
   { kind: "boolean", group: "View", key: "showHands", label: "show hands" },
   { kind: "choice", group: "View", key: "videoFit", label: "video fit", options: ["cover", "contain"] },
   { kind: "choice", group: "View", key: "videoMode", label: "video layer", options: ["element", "canvas"] },

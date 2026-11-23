@@ -19,6 +19,7 @@ import { createInstruments } from "./instruments";
 import type { HandFrame, Instrument } from "./instruments/Instrument";
 import { Effects } from "./render/effects";
 import { drawHands, type DrawLead } from "./render/handOverlay";
+import { lookLabel, nextLook } from "./render/look";
 import { Renderer } from "./render/renderer";
 import { TestLoad } from "./render/testLoad";
 import { Banner } from "./ui/banner";
@@ -65,6 +66,19 @@ const hud = new Hud(
     },
     onFullscreen: toggleFullscreen,
     onRecordVideo: toggleVideoRecord,
+    onLook: () => {
+      config.videoLook = nextLook(config.videoLook);
+      saveSettings(config);
+      hud.setLook(lookLabel(config.videoLook));
+      debug.syncTunables();
+    },
+    onHd: () => {
+      config.cameraRes = config.cameraRes === "1280x720" ? "640x480" : "1280x720";
+      saveSettings(config);
+      tracker.applySettings(); // reopens the camera at the new size, the model stays
+      hud.setHd(config.cameraRes === "1280x720");
+      debug.syncTunables();
+    },
   },
   () => assist.dismiss(),
 );
@@ -419,6 +433,8 @@ async function startApp(): Promise<void> {
   startScreen.hide();
   started = true;
   hud.show();
+  hud.setLook(lookLabel(config.videoLook));
+  hud.setHd(config.cameraRes === "1280x720");
   if (currentIndex < 0) selectInstrument(0);
   loop.start();
 }
