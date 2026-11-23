@@ -9,6 +9,7 @@
 //  Things that follow a hand are drawn ahead by the age of the camera picture (drawing only; the model never sees it).
 
 import type { Vec2 } from "../Instrument";
+import { outlinedText } from "../../render/text";
 import { keyAt, type Key } from "./layout";
 import type { PianoModel } from "./model";
 
@@ -115,7 +116,7 @@ export class PianoView {
     // Octave guide: the name of every C, faint.
     ctx.font = "11px ui-monospace, Consolas, monospace";
     ctx.fillStyle = "rgba(190,210,255,0.35)";
-    for (const k of keys) if (!k.black && k.pc === 0) ctx.fillText(k.name, k.x + 6, k.y + k.h - 8);
+    for (const k of keys) if (!k.black && k.pc === 0) outlinedText(ctx, k.name, k.x + 6, k.y + k.h - 8, "rgba(225,235,255,0.9)");
 
     ctx.globalCompositeOperation = "lighter";
 
@@ -165,9 +166,8 @@ export class PianoView {
     ctx.strokeRect(k.x, k.y, k.w, k.h);
     // note name at the top of the key
     ctx.globalAlpha = Math.min(1, g * 1.2);
-    ctx.fillStyle = c[2];
     ctx.font = "600 12px system-ui, sans-serif";
-    ctx.fillText(k.name, k.x + 4, k.y + 14);
+    outlinedText(ctx, k.name, k.x + 4, k.y + 14, c[2]);
     ctx.globalAlpha = 1;
   }
 

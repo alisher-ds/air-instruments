@@ -263,7 +263,11 @@ canvas#overlay {
   left: 14px;
   bottom: 12px;
   font-size: 0.75rem;
-  color: var(--muted);
+  color: #c4cce0;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 4px 10px;
   pointer-events: none !important;
 }
 

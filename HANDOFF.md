@@ -17,6 +17,14 @@ His HD picture was sharp, but the **Clear** look on a bright wall washed the lig
 - The Look button cycles **Auto -> Soft -> Clear -> Bright -> Auto** (the panel also has `custom`). The saved look of an earlier visit stays (`clear` if he pressed it): press Look until it says Auto.
 - Not done: the faint horizontal lines in his screenshot come from the camera / its compression, not from the app. If the effects are STILL hard to see on a bright wall, lower `AUTO_TARGET` (e.g. 0.35) or choose Soft.
 
+### Labels readable on any background (owner's second screenshot: the two edge texts were invisible on his white wall)
+
+The note names on the right edge of the theremin and the key legend at the bottom left were light text and vanished on a bright picture. Fixed (tests: **310 passing**, build passes; checked in the browser with a BRIGHT fake camera: the Auto look dimmed it to mid-grey, the labels, the lines and the legend are all readable):
+- `src/render/text.ts` `outlinedText`: dark outline under the light text, normal blending (additive text vanishes on bright pictures). Used for the theremin note names, the harp string names and the piano key names.
+- Theremin guide lines: a dark thin line under a light thin line each (visible on white AND dark pictures); the played note's line is drawn as before.
+- HUD legend: a dark panel behind it.
+- Other additive light (strings, sparks, waves) still depends on the picture not being white: that is what the Auto look is for.
+
 ## Stage 6 — final UX, hints, recording, README, deploy (done 2026-11-23)
 
 Tests: **296 passing** (was 284). `npm run build` passes. Checked in the real browser: the production build served from a **sub-folder** (`/air-instruments/`, like GitHub Pages) loads the tracking Worker (`ready`, GPU) and both AudioWorklets (`ok`); the page title / favicon / description are set; the loading screen shows the progress note; the **video recording** works (V starts, the button shows "■ Stop 0:03", V stops and a `.webm` file with the right name is produced); the "I can't see your hands" notice shows after 12 s without hands. **Not done by me: pushing, the actual deployment, and the README GIF** (I cannot record the owner's hands; the README has a comment saying how to make one).

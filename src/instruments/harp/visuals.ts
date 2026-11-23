@@ -13,6 +13,7 @@
 //    (drawing only; the model never sees them).
 
 import { noteName, pitchClass } from "../../audio/scales";
+import { outlinedText } from "../../render/text";
 import type { Vec2 } from "../Instrument";
 import type { HarpModel, HarpString } from "./model";
 
@@ -37,7 +38,7 @@ const GLOW: string[][][] = HUES.map((h) =>
     ];
   }),
 );
-const LABEL = HUES.map((h) => `hsla(${h},100%,80%,0.55)`);
+const LABEL = HUES.map((h) => `hsla(${h},100%,88%,0.95)`);
 
 function makeSprites(): Array<HTMLCanvasElement | null> {
   if (typeof document === "undefined") return HUES.map(() => null);
@@ -265,10 +266,9 @@ export class HarpView {
     }
 
     // Note name, subtle, at the upper end.
-    ctx.fillStyle = LABEL[pc]!;
-    ctx.font = "11px ui-monospace, Consolas, monospace";
+    ctx.font = "600 12px ui-monospace, Consolas, monospace";
     const top = ay <= by ? { x: ax, y: ay } : { x: bx, y: by };
-    ctx.fillText(noteName(s.midi), top.x + 12, top.y - 10);
+    outlinedText(ctx, noteName(s.midi), top.x + 12, top.y - 10, LABEL[pc]!);
   }
 
   private readonly wave = new Float32Array(WAVE_POINTS + 1);

@@ -9,6 +9,7 @@
 //    a vertical gauge next to the volume hand (below the dead zone it is empty).
 
 import { noteName } from "../../audio/scales";
+import { outlinedText } from "../../render/text";
 import { scaleNotes } from "../../audio/scales";
 import { ROOT_MIDI } from "../../audio/scales";
 import { config } from "../../config";
@@ -76,8 +77,8 @@ export class ThereminView {
 
     // --- guide lines (one path) ---
     const active = Math.round(st.midi);
-    ctx.lineWidth = 1;
-    ctx.strokeStyle = "rgba(170,200,255,0.10)";
+    // Each line is a dark thin line with a light thin line on it, so it shows on a white wall AND in a dark room.
+    ctx.globalCompositeOperation = "source-over";
     ctx.beginPath();
     for (const m of this.notes) {
       if (m === active && st.pitchHand) continue;
@@ -85,12 +86,17 @@ export class ThereminView {
       ctx.moveTo(0, y);
       ctx.lineTo(w, y);
     }
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "rgba(0,0,0,0.22)";
     ctx.stroke();
-    ctx.font = "11px ui-monospace, Consolas, monospace";
-    ctx.fillStyle = "rgba(190,215,255,0.35)";
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = "rgba(225,236,255,0.6)";
+    ctx.stroke();
+    ctx.font = "600 12px ui-monospace, Consolas, monospace";
     ctx.textAlign = "right";
-    for (const m of this.notes) ctx.fillText(noteName(m), w - 10, yOf(m) - 4);
+    for (const m of this.notes) outlinedText(ctx, noteName(m), w - 10, yOf(m) - 5, "rgba(235,242,255,0.95)");
     ctx.textAlign = "left";
+    ctx.globalCompositeOperation = "lighter";
 
     const hueIdx = Math.max(0, Math.min(35, Math.round(st.tPitch * 35)));
     const colors = HUES[hueIdx]!;
