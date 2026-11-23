@@ -75,6 +75,7 @@ interface Hand {
   id: number;                         // stable tracking id across frames (matched by nearest wrist position)
   side: "left" | "right";             // by SCREEN POSITION (left half / right half, user's view), not MediaPipe's handedness label, which flips unreliably
   landmarks: Vec2[];                  // 21 points
+  rawLandmarks: Vec2[];               // the same 21 points before smoothing (theremin vibrato needs it; added in Stage 4)
   tips: Vec2[];                       // thumb..pinky tips (4, 8, 12, 16, 20)
   tipVelocity: Vec2[];                // px/s
   tipVelocityRel: Vec2[];             // tip velocity MINUS palm velocity (finger motion only, hand motion removed)

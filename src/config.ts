@@ -146,6 +146,23 @@ export interface Config {
   /** Pitch of the deep "bum", Hz. */
   doiraBumHz: number;
 
+  // --- theremin (Stage 4) ---
+  /** Notes the pitch is pulled toward. */
+  thereminScale: ScaleName;
+  /** 0 = free glide (no pull), 1 = strongly sticks to scale notes. */
+  thereminSnap: number;
+  /** Time constant of the pitch glide, ms (higher = smoother, laggier). */
+  thereminGlideMs: number;
+  /** Vibrato depth at full wobble, cents (100 = a semitone). */
+  thereminVibratoCents: number;
+  /** Depth (0..1 of the above) the automatic vibrato fades in to on a held note. 0 = off. */
+  thereminAutoVibrato: number;
+  /** Left hand this low (0..1 of its calibrated range) is silent. */
+  thereminVolumeDead: number;
+  /** Side-to-side wrist wobble (RMS, in hand sizes) where vibrato starts / reaches full depth. */
+  thereminWobbleMin: number;
+  thereminWobbleFull: number;
+
   // --- audio (all instruments) ---
   /** Reverb amount 0..1. */
   reverbMix: number;
@@ -220,6 +237,14 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   doiraTapCooldownMs: 55,
   doiraPinchLockoutMs: 250,
   doiraBumHz: 110,
+  thereminScale: "major-pentatonic",
+  thereminSnap: 0.5,
+  thereminGlideMs: 60,
+  thereminVibratoCents: 45,
+  thereminAutoVibrato: 0.3,
+  thereminVolumeDead: 0.08,
+  thereminWobbleMin: 0.03,
+  thereminWobbleFull: 0.12,
   reverbMix: 0.3,
   harpClearHoldMs: 1500,
 
@@ -308,6 +333,14 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "Doira", key: "doiraTapFullSpeed", label: "finger tap full speed (hands/s)", min: 2, max: 20, step: 0.5 },
   { kind: "number", group: "Doira", key: "doiraTapCooldownMs", label: "finger cooldown (ms)", min: 0, max: 200, step: 5 },
   { kind: "number", group: "Doira", key: "doiraBumHz", label: "bum pitch (Hz)", min: 60, max: 250, step: 5 },
+  { kind: "choice", group: "Theremin", key: "thereminScale", label: "scale", options: ["major-pentatonic", "minor-pentatonic", "harmonic-minor"] },
+  { kind: "number", group: "Theremin", key: "thereminSnap", label: "snap to notes (0 = free glide)", min: 0, max: 1, step: 0.05 },
+  { kind: "number", group: "Theremin", key: "thereminGlideMs", label: "glide (ms)", min: 5, max: 300, step: 5 },
+  { kind: "number", group: "Theremin", key: "thereminVibratoCents", label: "vibrato depth (cents)", min: 0, max: 120, step: 5 },
+  { kind: "number", group: "Theremin", key: "thereminAutoVibrato", label: "auto vibrato on long notes", min: 0, max: 1, step: 0.05 },
+  { kind: "number", group: "Theremin", key: "thereminVolumeDead", label: "silent below (left hand)", min: 0, max: 0.4, step: 0.01 },
+  { kind: "number", group: "Theremin", key: "thereminWobbleMin", label: "wobble starts (hands)", min: 0.005, max: 0.2, step: 0.005 },
+  { kind: "number", group: "Theremin", key: "thereminWobbleFull", label: "wobble = full vibrato (hands)", min: 0.03, max: 0.4, step: 0.01 },
   { kind: "number", group: "Audio", key: "reverbMix", label: "reverb amount", min: 0, max: 1, step: 0.05 },
   { kind: "number", group: "Harp", key: "harpClearHoldMs", label: "clear-all hold (ms)", min: 500, max: 4000, step: 100 },
   { kind: "boolean", group: "Draw lag fix", key: "drawLeadEnabled", label: "draw skeleton ahead (by frame age)" },

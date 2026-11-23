@@ -36,12 +36,16 @@ export interface TrackedNorm {
   id: number;
   /** Smoothed landmarks in normalized camera space (0..1, not mirrored yet). */
   landmarks: Vec2[];
+  /** The same hand BEFORE the One Euro filter (the last detection; for a held hand, the last one seen). */
+  raw: Vec2[];
 }
 
 interface Track {
   id: number;
   smoother: LandmarkSmoother;
   landmarks: Vec2[];
+  /** Last RAW (unsmoothed) detection. */
+  raw: Vec2[];
   /** Last RAW wrist position, used for matching. */
   wrist: Vec2;
   lastSeenMs: number;
@@ -79,6 +83,7 @@ export class TrackManager {
       const track = this.tracks[p.ti]!;
       const det = detections[p.di]!;
       track.landmarks = track.smoother.filter(det, tSec, this.cfg);
+      track.raw = det;
       track.wrist = det[0]!;
       track.lastSeenMs = tMs;
     }
@@ -100,12 +105,13 @@ export class TrackManager {
         id: this.nextId++,
         smoother,
         landmarks: smoother.filter(det, tSec, this.cfg),
+        raw: det,
         wrist: det[0]!,
         lastSeenMs: tMs,
       });
     });
 
-    return this.tracks.map((t) => ({ id: t.id, landmarks: t.landmarks }));
+    return this.tracks.map((t) => ({ id: t.id, landmarks: t.landmarks, raw: t.raw }));
   }
 
   reset(): void {
@@ -144,6 +150,7 @@ export class HandPipeline {
     const inputs = tracked.map((t) => ({
       id: t.id,
       landmarks: t.landmarks.map((p) => normalizedToCanvas(p.x, p.y, fit)),
+      raw: t.raw.map((p) => normalizedToCanvas(p.x, p.y, fit)),
     }));
     return this.analyzer.analyze(inputs, tMs, this.canvasW);
   }

@@ -37,6 +37,8 @@ export interface Hand {
   side: "left" | "right";
   /** 21 points. */
   landmarks: Vec2[];
+  /** The same 21 points BEFORE the One Euro filter (needed where tiny motion matters, e.g. theremin vibrato). */
+  rawLandmarks: Vec2[];
   /** Thumb..pinky tips (landmarks 4, 8, 12, 16, 20) - 5 points. */
   tips: Vec2[];
   /** px/s */

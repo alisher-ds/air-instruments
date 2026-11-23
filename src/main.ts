@@ -292,7 +292,20 @@ const loop = new MainLoop((_dt, now) => {
 
 // --- start / errors ------------------------------------------------------
 
+let starting = false;
+
 async function onStart(): Promise<void> {
+  // A second click (or a retry press) while the first start is still running would close the camera under it.
+  if (starting) return;
+  starting = true;
+  try {
+    await startApp();
+  } finally {
+    starting = false;
+  }
+}
+
+async function startApp(): Promise<void> {
   startScreen.showLoading("Starting audio...");
   // The AudioContext must be created inside this click handler.
   if (!audio) {

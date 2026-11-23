@@ -101,6 +101,8 @@ export interface TrackedInput {
   id: number;
   /** 21 smoothed landmarks in canvas pixels, mirrored. */
   landmarks: Vec2[];
+  /** The same 21 points before smoothing (optional: recordings only keep smoothed points, then raw = smoothed). */
+  raw?: Vec2[];
 }
 
 interface HandState {
@@ -169,6 +171,7 @@ export class HandAnalyzer {
         id: input.id,
         side: sides[i]!,
         landmarks: lm,
+        rawLandmarks: input.raw ?? lm,
         tips,
         tipVelocity: tipVel,
         tipVelocityRel: tipVel.map((v) => sub(v, palmVel)),

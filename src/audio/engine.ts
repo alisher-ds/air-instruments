@@ -30,6 +30,8 @@ export class AudioEngine {
   readonly stringBus: GainNode;
   /** The doira's bus and synth (made nodes per hit, see drum.ts). */
   readonly drumBus: GainNode;
+  /** The theremin's bus (its oscillators are made by the instrument, see theremin.ts). */
+  readonly thereminBus: GainNode;
   private readonly doira: DoiraSynth;
   /** Drum hits played, and the time from "landmarks received" to "hit played" (ms). */
   drumHitCount = 0;
@@ -76,6 +78,10 @@ export class AudioEngine {
     this.drumBus.gain.value = 0.9;
     this.drumBus.connect(this.input);
     this.doira = new DoiraSynth(this.ctx, this.drumBus);
+
+    this.thereminBus = this.ctx.createGain();
+    this.thereminBus.gain.value = 0.9;
+    this.thereminBus.connect(this.input);
 
     this.input.connect(this.master); // dry
 

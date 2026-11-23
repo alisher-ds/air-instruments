@@ -24,6 +24,8 @@ export const SAVED_KEYS: ReadonlyArray<keyof Config & string> = [
   "harpTone",
   "doiraBumHz",
   "doiraRadiusFrac",
+  "thereminScale",
+  "thereminSnap",
   "reverbMix",
 ];
 
