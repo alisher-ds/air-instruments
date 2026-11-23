@@ -10,7 +10,7 @@
 
 import { config } from "../config";
 import { fitTransform, type FitTransform } from "../core/geometry";
-import { lookFilter, lookParams } from "./look";
+import { averageLuma, lookFilter, lookParams } from "./look";
 import { backingSize, renderRatios } from "./renderScale";
 
 const BG = "#05060a";
@@ -36,6 +36,10 @@ export class Renderer {
   private overlayCtx: CanvasRenderingContext2D | null = null;
   private overlayShown = false;
   private layerKey = "";
+  /** How bright the camera picture is (0..1), measured about once a second on a tiny copy; used by the "auto" look. */
+  private luma = 0.4;
+  private lumaAt = 0;
+  private lumaCanvas: HTMLCanvasElement | null = null;
   private layerVideo: HTMLVideoElement | null = null;
 
   private fit: FitTransform = { offsetX: 0, offsetY: 0, drawWidth: 0, drawHeight: 0 };
@@ -108,7 +112,8 @@ export class Renderer {
   private syncVideoLayer(video: HTMLVideoElement | null): void {
     if (!video) return;
     const layer = config.videoMode === "element";
-    const look = lookParams(config.videoLook, config.videoDim);
+    this.measureLuma(video);
+    const look = lookParams(config.videoLook, config.videoDim, this.luma);
     const dim = look.dim;
     const filter = lookFilter(look);
     const key = `${layer}|${config.videoFit}|${dim}|${filter}`;
@@ -142,7 +147,7 @@ export class Renderer {
     ctx.globalAlpha = 1;
 
     const hasVideo = video !== null && video.videoWidth > 0 && video.readyState >= 2;
-    const look = lookParams(config.videoLook, config.videoDim);
+    const look = lookParams(config.videoLook, config.videoDim, this.luma);
     const dim = look.dim;
     const fit = hasVideo ? this.fitFor(video) : null;
     const covers =
@@ -243,7 +248,7 @@ export class Renderer {
       target.save();
       target.translate(fit.offsetX + fit.drawWidth, fit.offsetY);
       target.scale(-1, 1);
-      const look = lookParams(config.videoLook, config.videoDim);
+      const look = lookParams(config.videoLook, config.videoDim, this.luma);
       target.globalAlpha = 1 - look.dim;
       target.filter = lookFilter(look);
       target.drawImage(video, 0, 0, fit.drawWidth, fit.drawHeight);
@@ -251,6 +256,31 @@ export class Renderer {
     }
     target.drawImage(this.canvas, 0, 0, w, h);
     if (this.overlay && this.overlayShown) target.drawImage(this.overlay, 0, 0, w, h);
+  }
+
+  /**
+   * The "auto" look needs to know how bright the picture is. About once a second the video is drawn onto a 16x9 canvas and its
+   * pixels averaged (a few hundred operations, nothing next to the frame itself); the value is smoothed so the look glides.
+   */
+  private measureLuma(video: HTMLVideoElement): void {
+    if (config.videoLook !== "auto" || video.readyState < 2 || video.videoWidth === 0) return;
+    const now = performance.now();
+    if (now - this.lumaAt < 1000) return;
+    this.lumaAt = now;
+    try {
+      if (!this.lumaCanvas) {
+        this.lumaCanvas = document.createElement("canvas");
+        this.lumaCanvas.width = 16;
+        this.lumaCanvas.height = 9;
+      }
+      const g = this.lumaCanvas.getContext("2d", { willReadFrequently: true });
+      if (!g) return;
+      g.drawImage(video, 0, 0, 16, 9);
+      const measured = averageLuma(g.getImageData(0, 0, 16, 9).data);
+      this.luma = this.luma * 0.4 + measured * 0.6;
+    } catch {
+      // a browser that refuses to read the picture: the look stays at its last value
+    }
   }
 
   /** What the canvas is really doing, for the debug panel. */
