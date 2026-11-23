@@ -282,6 +282,9 @@ const loop = new MainLoop((_dt, now) => {
             drumHits: audio.drumHitCount,
             drumDelayMs: audio.lastHitDelayMs,
             drumDelayMaxMs: audio.maxHitDelayMs,
+            pianoNotes: audio.pianoNoteCount,
+            pianoDelayMs: audio.lastNoteDelayMs,
+            pianoDelayMaxMs: audio.maxNoteDelayMs,
           }
         : null,
       recording: { active: recorder.recording, seconds: recorder.seconds, frames: recorder.frameCount },

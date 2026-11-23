@@ -165,6 +165,28 @@ export interface Config {
   thereminWobbleMin: number;
   thereminWobbleFull: number;
 
+  // --- air piano (Stage 5) ---
+  /** Octaves of keys (white + black). */
+  pianoOctaves: number;
+  /** Octave of the lowest key (4 = starts at C4, middle C). */
+  pianoLowOctave: number;
+  /** Let the thumb play notes (off: it moves too freely and presses by accident). */
+  pianoThumb: boolean;
+  /** A press needs the finger's curl (0..1) to RISE by this much within ~150 ms ... */
+  pianoCurlMin: number;
+  /** ... together with the fingertip moving DOWN relative to the palm at least this fast (hand sizes/s). */
+  pianoRelMin: number;
+  /** Relative speed (hand sizes/s) for the loudest note. */
+  pianoRelFull: number;
+  /** A finger is dropped if a NEIGHBOUR finger moved this many times more at the same moment (ring and pinky move together). */
+  pianoSympathy: number;
+  /** While the whole hand moves faster than this (hand sizes/s) nothing is pressed (a swipe over the keys). */
+  pianoMaxPalmSpeed: number;
+  /** One finger cannot press twice within this. ms. */
+  pianoCooldownMs: number;
+  /** The key is released when the curl has fallen this fraction of the way back (0 = right away, 1 = fully). */
+  pianoReleaseFrac: number;
+
   // --- audio (all instruments) ---
   /** Reverb amount 0..1. */
   reverbMix: number;
@@ -240,6 +262,16 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   doiraTapCooldownMs: 55,
   doiraPinchLockoutMs: 250,
   doiraBumHz: 110,
+  pianoOctaves: 2,
+  pianoLowOctave: 4,
+  pianoThumb: false,
+  pianoCurlMin: 0.12,
+  pianoRelMin: 1.5,
+  pianoRelFull: 7,
+  pianoSympathy: 1.6,
+  pianoMaxPalmSpeed: 8,
+  pianoCooldownMs: 50,
+  pianoReleaseFrac: 0.4,
   thereminScale: "major-pentatonic",
   thereminSnap: 0.5,
   thereminGlideMs: 60,
@@ -345,6 +377,16 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "Theremin", key: "thereminVolumeDead", label: "silent below (left hand)", min: 0, max: 0.4, step: 0.01 },
   { kind: "number", group: "Theremin", key: "thereminWobbleMin", label: "wobble starts (hands)", min: 0.005, max: 0.2, step: 0.005 },
   { kind: "number", group: "Theremin", key: "thereminWobbleFull", label: "wobble = full vibrato (hands)", min: 0.03, max: 0.4, step: 0.01 },
+  { kind: "number", group: "Piano", key: "pianoOctaves", label: "octaves of keys", min: 1, max: 3, step: 1 },
+  { kind: "number", group: "Piano", key: "pianoLowOctave", label: "lowest octave (4 = middle C)", min: 2, max: 5, step: 1 },
+  { kind: "boolean", group: "Piano", key: "pianoThumb", label: "thumb plays notes" },
+  { kind: "number", group: "Piano", key: "pianoCurlMin", label: "press: finger bend at least", min: 0.03, max: 0.5, step: 0.01 },
+  { kind: "number", group: "Piano", key: "pianoRelMin", label: "press: finger speed at least (hands/s)", min: 0.3, max: 6, step: 0.1 },
+  { kind: "number", group: "Piano", key: "pianoRelFull", label: "loudest note at speed (hands/s)", min: 2, max: 20, step: 0.5 },
+  { kind: "number", group: "Piano", key: "pianoSympathy", label: "neighbour finger moves x more = ignore", min: 1, max: 5, step: 0.1 },
+  { kind: "number", group: "Piano", key: "pianoMaxPalmSpeed", label: "no notes while hand moves faster", min: 2, max: 20, step: 0.5 },
+  { kind: "number", group: "Piano", key: "pianoCooldownMs", label: "finger cooldown (ms)", min: 0, max: 200, step: 5 },
+  { kind: "number", group: "Piano", key: "pianoReleaseFrac", label: "release when bend fell by", min: 0.1, max: 0.9, step: 0.05 },
   { kind: "number", group: "Audio", key: "reverbMix", label: "reverb amount", min: 0, max: 1, step: 0.05 },
   { kind: "number", group: "Harp", key: "harpClearHoldMs", label: "clear-all hold (ms)", min: 500, max: 4000, step: 100 },
   { kind: "boolean", group: "Draw lag fix", key: "drawLeadEnabled", label: "draw skeleton ahead (by frame age)" },

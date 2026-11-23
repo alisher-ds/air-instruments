@@ -9,6 +9,7 @@ import dummyWorkletUrl from "./worklets/dummy.ts?worker&url";
 import ksWorkletUrl from "./worklets/ks-string.ts?worker&url";
 import type { PluckParams } from "./ksVoice";
 import { DoiraSynth, type DrumHit } from "./drum";
+import { PianoSynth } from "./piano";
 import { makeImpulse } from "./reverb";
 
 const WET_GAIN_AT_FULL_MIX = 2.5;
@@ -32,6 +33,13 @@ export class AudioEngine {
   readonly drumBus: GainNode;
   /** The theremin's bus (its oscillators are made by the instrument, see theremin.ts). */
   readonly thereminBus: GainNode;
+  /** The air piano's bus and synth. */
+  readonly pianoBus: GainNode;
+  private readonly piano: PianoSynth;
+  /** Piano notes played, and the time from "landmarks received" to "note started" (ms). */
+  pianoNoteCount = 0;
+  lastNoteDelayMs = 0;
+  maxNoteDelayMs = 0;
   private readonly doira: DoiraSynth;
   /** Drum hits played, and the time from "landmarks received" to "hit played" (ms). */
   drumHitCount = 0;
@@ -82,6 +90,11 @@ export class AudioEngine {
     this.thereminBus = this.ctx.createGain();
     this.thereminBus.gain.value = 0.9;
     this.thereminBus.connect(this.input);
+
+    this.pianoBus = this.ctx.createGain();
+    this.pianoBus.gain.value = 0.9;
+    this.pianoBus.connect(this.input);
+    this.piano = new PianoSynth(this.ctx, this.pianoBus);
 
     this.input.connect(this.master); // dry
 
@@ -151,6 +164,25 @@ export class AudioEngine {
       this.maxPluckDelayMs = Math.max(this.maxPluckDelayMs, this.lastPluckDelayMs);
     }
     return true;
+  }
+
+  /** Starts a piano note for finger `id` (see PianoSynth). `receivedAt` = performance.now() when the landmarks arrived. */
+  pianoOn(id: number, midi: number, velocity: number, receivedAt?: number): void {
+    void this.ctx.resume();
+    this.piano.noteOn(id, midi, velocity);
+    this.pianoNoteCount++;
+    if (receivedAt !== undefined) {
+      this.lastNoteDelayMs = performance.now() - receivedAt;
+      this.maxNoteDelayMs = Math.max(this.maxNoteDelayMs, this.lastNoteDelayMs);
+    }
+  }
+
+  pianoOff(id: number): void {
+    this.piano.noteOff(id);
+  }
+
+  pianoStopAll(): void {
+    this.piano.stopAll();
   }
 
   /** Plays a doira hit now. `receivedAt` = performance.now() when the landmarks behind it arrived (for the panel). */

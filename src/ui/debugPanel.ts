@@ -43,6 +43,9 @@ export interface DebugInfo {
     drumHits: number;
     drumDelayMs: number;
     drumDelayMaxMs: number;
+    pianoNotes: number;
+    pianoDelayMs: number;
+    pianoDelayMaxMs: number;
   } | null;
   recording: { active: boolean; seconds: number; frames: number };
   canvas: { width: number; height: number };
@@ -255,6 +258,9 @@ export class DebugPanel {
       );
       lines.push(
         `drum        ${a.drumHits} hits | landmarks received -> hit played: ${f(a.drumDelayMs, 2)} ms last, ${f(a.drumDelayMaxMs, 2)} ms max (target < 5)`,
+      );
+      lines.push(
+        `piano       ${a.pianoNotes} notes | landmarks received -> note started: ${f(a.pianoDelayMs, 2)} ms last, ${f(a.pianoDelayMaxMs, 2)} ms max (target < 5)`,
       );
     }
     lines.push(
