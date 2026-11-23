@@ -14,7 +14,7 @@ import { ThereminModel, sanitizeCalibration, type ThereminCalibration } from "./
 import { ThereminView } from "./visuals";
 
 const STORAGE_KEY = "air-instruments.theremin.v1";
-const MAX_LEAD_MS = 150;
+const MAX_LEAD_MS = 220; // the real age: camera capture -> now
 const MAX_LEAD_HANDS = 0.5;
 const ZERO: Vec2 = { x: 0, y: 0 };
 
@@ -61,7 +61,7 @@ export function createTheremin(): Instrument {
 
   function aheadOf(hand: Hand | undefined, now: number, frame: HandFrame | null): Vec2 {
     if (!hand || !frame) return ZERO;
-    const age = Math.min(MAX_LEAD_MS, Math.max(0, now - frame.timestamp));
+    const age = Math.min(MAX_LEAD_MS, Math.max(0, now - (frame.captureTime ?? frame.timestamp)));
     return extrapolate(ZERO, hand.palmVelocity, age, MAX_LEAD_HANDS * hand.handSize);
   }
 

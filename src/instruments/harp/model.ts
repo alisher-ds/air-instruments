@@ -15,7 +15,7 @@
 // predicted path, so each crossing still happens exactly once.
 
 import { midiToFreq, noteForLength, scaleNotes, type ScaleName } from "../../audio/scales";
-import { predictedTip, type PredictConfig } from "../../core/predict";
+import { extrapolate, predictedTip, type PredictConfig } from "../../core/predict";
 import { clamp, dist, pointSegmentDistance, segmentIntersection, sub } from "../../core/geometry";
 import type { Hand, HandFrame, Vec2 } from "../Instrument";
 
@@ -336,6 +336,9 @@ export class HarpModel {
     this.pinches = [];
     this.preview = null;
 
+    // How old the hand picture is (camera capture -> now): the hand the player SEES is that far ahead of the landmarks.
+    const ageMs = Math.max(0, Math.min(250, now - (frame.captureTime ?? now)));
+
     // Pass 1: pinch state machines (grab / create), in a fixed order by hand id.
     const hands = [...frame.hands].sort((p, q) => p.id - q.id);
     for (const hand of hands) {
@@ -359,7 +362,7 @@ export class HarpModel {
           bridged = true;
         }
       }
-      if (pinchNow && !st.pinching) this.beginPinch(hand, st, now, events);
+      if (pinchNow && !st.pinching) this.beginPinch(hand, st, now, ageMs, events);
       else if (!pinchNow && st.pinching) {
         st.offSince = null;
         this.endPinch(st, now, events, false);
@@ -378,6 +381,12 @@ export class HarpModel {
     return events;
   }
 
+  /** The pinch point moved ahead by the age of the picture, along the thumb/index velocity (at most half a hand size). */
+  private aheadPoint(hand: Hand, p: Vec2, ageMs: number): Vec2 {
+    const v = { x: (hand.tipVelocity[0]!.x + hand.tipVelocity[1]!.x) / 2, y: (hand.tipVelocity[0]!.y + hand.tipVelocity[1]!.y) / 2 };
+    return extrapolate(p, v, ageMs, 0.5 * hand.handSize);
+  }
+
   private findGrab(p: Vec2, handSize: number): HarpString | null {
     const limit = this.cfg.harpGrabDist * handSize;
     let best: HarpString | null = null;
@@ -392,13 +401,13 @@ export class HarpModel {
     return best;
   }
 
-  private beginPinch(hand: Hand, st: HandState, now: number, events: HarpEvent[]): void {
+  private beginPinch(hand: Hand, st: HandState, now: number, ageMs: number, events: HarpEvent[]): void {
     const p = hand.pinch.point;
     st.lastPoint = p;
     st.pinchStartedAt = now;
     st.lastPinchAt = now;
     st.ignoreReason = "";
-    const hit = this.findGrab(p, hand.handSize);
+    const hit = this.findGrab(p, hand.handSize) ?? this.findGrab(this.aheadPoint(hand, p, ageMs), hand.handSize);
     if (!hit && isFist(hand, this.cfg.harpFistCurl)) {
       // A closing fist touches thumb and index too. It cannot CREATE a string (grabbing an existing one is deliberate: allowed).
       st.mode = "ignored";

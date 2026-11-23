@@ -889,7 +889,9 @@ export class HandTracker {
     this.lastCaptureTime = d.captureTime;
     this.onSample({ arrival: d.arrival, inferenceMs: d.inferenceMs, frameAgeMs: d.arrival - d.captureTime, hands: d.hands.length });
 
-    this.onFrame(this.pipeline.process(d.hands, d.arrival));
+    const frame = this.pipeline.process(d.hands, d.arrival);
+    frame.captureTime = d.captureTime;
+    this.onFrame(frame);
   }
 
   /** Starts the stats window again (the owner presses "Reset numbers" after changing a setting, to measure it cleanly). */

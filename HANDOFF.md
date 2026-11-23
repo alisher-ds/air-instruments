@@ -11,6 +11,13 @@ His words (about the harp strings): "chiziqlar yaxshi chizilmayapti, ushlasam us
 
 Still unknown (asked the owner with buttons): does the panel show "PINCH ON" when he pinches, which ring colour he sees, and what exactly looked wrong when "drawing" (nothing appears / follows choppily / disappears / looks ugly). If the pinch badge does not light at all, the problem is the pinch thresholds (`pinch ON below` 0.25) or the camera/lighting, not the harp.
 
+### Harp fix part 2 (the owner answered with buttons): the lines lagged behind the hand and a grab did nothing
+
+Answers: "PINCH ON" lights reliably (so the pinch thresholds are fine); strings were not created and the line followed the hand late; pinching near a string did nothing. Fixes on top of the ones above (tests: **247 passing**, build passes):
+- **Real age for draw-ahead.** The instruments drew hand-following things ahead by `now - frame.timestamp` (time since the landmarks ARRIVED), which leaves out the ~80-100 ms between camera capture and arrival: that was the lag he saw. `HandFrame` got an optional `captureTime` (set in `HandTracker.deliver`; PLAN.md interface unchanged otherwise, recordings/tests simply do not have it); harp, doira and theremin now use `now - (captureTime ?? timestamp)`, up to 220 ms; the harp's visual lead may be 0.8 hand sizes (was 0.5) because smoothed velocities understate fast motion.
+- **Grab uses where the pinch is heading.** `findGrab` is tried at the measured pinch point and at the point moved ahead by the camera age along the thumb/index velocity (max 0.5 hand size), so a pinch that is still a bit short of the string (the hand image is ~100 ms old) grabs it. Tested (with and without `captureTime`).
+- If strings are STILL not created: it is probably `pinch held at least` (120 ms) or `min string length` (1.5 hands): ask him to pull the hands further apart / hold the pinch a moment, or lower those two sliders in the panel (group Harp).
+
 ## Stage 4 — theremin (done 2026-11-23)
 
 Tests: **240 passing** (was 211). `npm run build` passes. Checked in the real browser (production preview) with synthetic hands fed through the REAL pipeline: first-use calibration runs and is saved, a high hand gives a higher note (measured 220 Hz at a low hand, ~720-750 Hz high), a low left hand is silent, a pinch mutes, a 14 px sideways wobble of the raw hand made 38 cents of vibrato at 5.1 Hz while the smoothed hand barely moved, the wave / guide lines / gauges draw. **I have never heard it and never seen it with real hands.**

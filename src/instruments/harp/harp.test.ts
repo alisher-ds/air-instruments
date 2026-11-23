@@ -66,6 +66,8 @@ class Rig {
     this.model.setViewport(W, H);
   }
   /** One tracking frame `dtMs` after the previous one. Returns this frame's events. */
+  /** Real camera age of the next frames (ms); 0 = unknown, like a recording. */
+  captureAgeMs = 0;
   step(hands: Spec[], dtMs = 33): HarpEvent[] {
     this.t += dtMs;
     const frame = this.analyzer.analyze(
@@ -76,6 +78,7 @@ class Rig {
       this.t,
       W,
     );
+    if (this.captureAgeMs > 0) frame.captureTime = this.t - this.captureAgeMs;
     const ev = this.model.update(frame, this.t);
     this.events.push(...ev);
     return ev;
@@ -392,6 +395,30 @@ describe("a pinch that flickers, and a relaxed pinch posture (the owner: 'lines 
     for (let i = 0; i < 3; i++) rig.step([{ id: 1, ...wristFor(620, 300), open: 1 }], 70); // a real release
     expect(rig.model.strings).toHaveLength(1);
     expect(rig.model.strings[0]!.b.x).toBeCloseTo(560, 0); // ends where the LAST real pinch frame was
+  });
+});
+
+describe("the hand picture is ~100 ms old: grabbing uses where the pinch is heading", () => {
+  const approach = (captureAgeMs: number) => {
+    const rig = new Rig();
+    rig.captureAgeMs = captureAgeMs;
+    const s = rig.model.addString({ x: 400, y: 200 }, { x: 400, y: 600 })!;
+    // an open hand sweeps right toward the string at ~7 hand sizes/s ...
+    for (let i = 0; i < 5; i++) rig.step([{ id: 1, ...wristFor(200 + i * 25, 400), open: 1 }]);
+    // ... and pinches while still moving; the measured pinch point is 100 px (1 hand size) short of the string
+    rig.step([{ id: 1, ...wristFor(300, 400), open: 0 }]);
+    return { rig, s };
+  };
+
+  it("with the camera age known, a pinch that is still a bit short of the string grabs it", () => {
+    const { rig, s } = approach(100);
+    expect(rig.model.grabbed.has(s.id)).toBe(true);
+  });
+
+  it("with no age (recordings) the same pinch is simply too far: it starts a new string, as before", () => {
+    const { rig, s } = approach(0);
+    expect(rig.model.grabbed.has(s.id)).toBe(false);
+    expect(rig.model.pinches[0]!.mode).toBe("create");
   });
 });
 

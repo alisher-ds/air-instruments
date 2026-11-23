@@ -19,8 +19,8 @@ const SCALE_LABELS: Record<ScaleName, string> = {
 };
 
 /** Drawing lead for things that follow a hand: at most this far ahead, and at most this many hand sizes. */
-const MAX_LEAD_MS = 150;
-const MAX_LEAD_HANDS = 0.5;
+const MAX_LEAD_MS = 220; // the real age: camera capture -> now (frame age ~100 ms + the time since the frame arrived)
+const MAX_LEAD_HANDS = 0.8; // smoothed velocities understate fast motion, so allow a bit more than the logic's 0.5
 
 export function createHarp(): Instrument {
   const model = new HarpModel(config);
@@ -165,7 +165,7 @@ export function createHarp(): Instrument {
       // Shift things that follow a hand ahead by the age of the last tracking frame (drawing only).
       shifts.clear();
       if (lastFrame) {
-        const age = Math.min(MAX_LEAD_MS, Math.max(0, now - lastFrame.timestamp));
+        const age = Math.min(MAX_LEAD_MS, Math.max(0, now - (lastFrame.captureTime ?? lastFrame.timestamp)));
         for (const h of lastFrame.hands) {
           const v = { x: (h.tipVelocity[0]!.x + h.tipVelocity[1]!.x) / 2, y: (h.tipVelocity[0]!.y + h.tipVelocity[1]!.y) / 2 };
           shifts.set(h.id, extrapolate({ x: 0, y: 0 }, v, age, MAX_LEAD_HANDS * h.handSize));

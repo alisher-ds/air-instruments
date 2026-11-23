@@ -11,7 +11,7 @@ import { DoiraModel, type DoiraEvent } from "./model";
 import { DoiraView } from "./visuals";
 
 const STORAGE_KEY = "air-instruments.doira.v1";
-const MAX_LEAD_MS = 150;
+const MAX_LEAD_MS = 220; // the real age: camera capture -> now (frame age ~100 ms + the time since the frame arrived)
 const MAX_LEAD_HANDS = 0.5;
 
 function loadPosition(model: DoiraModel): void {
@@ -101,7 +101,7 @@ export function createDoira(): Instrument {
       if (lastFrame && model.dragging.size > 0) {
         const hand = lastFrame.hands.find((h) => model.dragging.has(h.id));
         if (hand) {
-          const age = Math.min(MAX_LEAD_MS, Math.max(0, now - lastFrame.timestamp));
+          const age = Math.min(MAX_LEAD_MS, Math.max(0, now - (lastFrame.captureTime ?? lastFrame.timestamp)));
           const v = { x: (hand.tipVelocity[0]!.x + hand.tipVelocity[1]!.x) / 2, y: (hand.tipVelocity[0]!.y + hand.tipVelocity[1]!.y) / 2 };
           shift = extrapolate({ x: 0, y: 0 }, v, age, MAX_LEAD_HANDS * hand.handSize);
         }

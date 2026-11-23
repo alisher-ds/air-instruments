@@ -27,7 +27,14 @@ export interface Instrument {
 export interface HandFrame {
   /** 0-2 hands, already smoothed, in canvas pixel space, mirrored. */
   hands: Hand[];
+  /** When the landmarks reached the main thread (performance.now clock). */
   timestamp: number;
+  /**
+   * When the camera captured the picture the landmarks come from (same clock; usually ~80-100 ms before `timestamp`).
+   * Drawing-ahead and prediction must use `now - captureTime`: that is the real age of what the hands are shown doing.
+   * Missing (tests, recordings) = use `timestamp`.
+   */
+  captureTime?: number;
 }
 
 export interface Hand {
