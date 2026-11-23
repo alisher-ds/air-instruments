@@ -31,6 +31,16 @@ Current state: **Stage 1 (harp) finished** (2026-11-23): strings, plucking, Karp
 2. Agent: tune the harp tunables from his notes (and replay any clips he records with **R** in `test/recordings/`: the harp model can be replayed in a Vitest test like `test/replay.test.ts` does for gestures).
 3. Then **Stage 2** (visual + audio polish: reverb, nicer vibration/glow, performance, render-side interpolation of hands). Reverb goes before the limiter in `engine.ts`.
 
+## Tracking mode tests after Stage 1 (owner, hands in view, harp open)
+
+| Setting | render | inference with hands (avg) | tracking fps | frame age avg / p95 | notes |
+|---|---|---|---|---|---|
+| main + CPU (render cap 50) | 21 fps | 70.8 ms | 20 (47% camera frames missed by the browser) | 84 / 130 | main thread 100% inside MediaPipe: render starved, not usable |
+| **worker + CPU** (render uncapped) | 60 fps | **115 ms** | 13 | 136 / 198 | worse than worker + GPU; plucks send in 0.5 ms (max 1.4) |
+| worker + GPU (render cap 5, earlier) | 5 fps | 68-70 ms | 16 | 82-103 | the floor |
+
+Reading: **the CPU delegate in a worker (115 ms) is much slower than the same CPU delegate on the main thread (71 ms).** Same code, so the thread is the cause (a guess I could not test: on a hybrid Intel CPU Windows may place the worker thread on slower efficiency cores, or give it a lower priority). So worker + CPU is NOT an improvement. Decision: keep **worker + GPU, render cap 30** as the default. Pluck delay inside the app is tiny in every run (max 1.4 ms, target < 5). Open question for later: can the worker be made as fast as the main thread (thread priority is not controllable from JS; `infer every 2` and `numHands` 1 are the remaining levers).
+
 ## Stage 0.7 — owner's result (Intel Iris Xe, window 1920x970, dpr 1.0, worker + GPU, both hands, synthetic harp-like load ON)
 
 ```
