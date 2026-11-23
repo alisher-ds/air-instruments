@@ -279,6 +279,9 @@ const loop = new MainLoop((_dt, now) => {
             plucks: audio.pluckCount,
             pluckDelayMs: audio.lastPluckDelayMs,
             pluckDelayMaxMs: audio.maxPluckDelayMs,
+            drumHits: audio.drumHitCount,
+            drumDelayMs: audio.lastHitDelayMs,
+            drumDelayMaxMs: audio.maxHitDelayMs,
           }
         : null,
       recording: { active: recorder.recording, seconds: recorder.seconds, frames: recorder.frameCount },

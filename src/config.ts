@@ -121,6 +121,31 @@ export interface Config {
   /** 0 = dark and soft, 1 = bright. Scales how bright every pluck sounds. */
   harpTone: number;
 
+  // --- doira (Stage 3). Speeds are in hand sizes per second so they work at any distance from the camera. ---
+  /** Drum radius as a fraction of the smaller screen side. */
+  doiraRadiusFrac: number;
+  /** A palm entering the drum slower than this does not hit. */
+  doiraHitMinSpeed: number;
+  /** ...and at this speed a hit is at full loudness. */
+  doiraHitFullSpeed: number;
+  /** "Slam and stop": the palm was this fast within the last ~150 ms ... */
+  doiraSpikeSpeed: number;
+  /** ...and is now at most this fraction of that speed, inside the drum: a hit. */
+  doiraStopRatio: number;
+  /** After a hit the hand may hit again once it left the drum or moved slower than this. */
+  doiraRearmSpeed: number;
+  /** One hand cannot hit twice within this. ms. */
+  doiraHitCooldownMs: number;
+  /** Fingertip speed relative to the palm for a finger tap, and the speed for the loudest tap. */
+  doiraTapMinSpeed: number;
+  doiraTapFullSpeed: number;
+  /** A finger cannot tap twice within this. ms. */
+  doiraTapCooldownMs: number;
+  /** After a pinch (moving the drum) the hand cannot hit for this long. ms. */
+  doiraPinchLockoutMs: number;
+  /** Pitch of the deep "bum", Hz. */
+  doiraBumHz: number;
+
   // --- audio (all instruments) ---
   /** Reverb amount 0..1. */
   reverbMix: number;
@@ -183,6 +208,18 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   harpMinPinchMs: 150,
   harpFistCurl: 0.7,
   harpTone: 0.55,
+  doiraRadiusFrac: 0.2,
+  doiraHitMinSpeed: 2.5,
+  doiraHitFullSpeed: 10,
+  doiraSpikeSpeed: 3.5,
+  doiraStopRatio: 0.5,
+  doiraRearmSpeed: 1,
+  doiraHitCooldownMs: 90,
+  doiraTapMinSpeed: 2.5,
+  doiraTapFullSpeed: 8,
+  doiraTapCooldownMs: 55,
+  doiraPinchLockoutMs: 250,
+  doiraBumHz: 110,
   reverbMix: 0.3,
   harpClearHoldMs: 1500,
 
@@ -260,6 +297,17 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "Harp", key: "harpMinPinchMs", label: "pinch held at least (ms)", min: 0, max: 600, step: 10 },
   { kind: "number", group: "Harp", key: "harpFistCurl", label: "fist = other fingers bent more than", min: 0.3, max: 1, step: 0.05 },
   { kind: "number", group: "Harp", key: "harpTone", label: "tone (dark .. bright)", min: 0, max: 1, step: 0.05 },
+  { kind: "number", group: "Doira", key: "doiraRadiusFrac", label: "drum size (x screen height)", min: 0.1, max: 0.4, step: 0.01 },
+  { kind: "number", group: "Doira", key: "doiraHitMinSpeed", label: "hit min speed (hands/s)", min: 0.5, max: 8, step: 0.1 },
+  { kind: "number", group: "Doira", key: "doiraHitFullSpeed", label: "hit full-volume speed (hands/s)", min: 3, max: 25, step: 0.5 },
+  { kind: "number", group: "Doira", key: "doiraSpikeSpeed", label: "slam-and-stop: was this fast", min: 1, max: 12, step: 0.1 },
+  { kind: "number", group: "Doira", key: "doiraStopRatio", label: "slam-and-stop: now at most (x)", min: 0.05, max: 0.9, step: 0.05 },
+  { kind: "number", group: "Doira", key: "doiraRearmSpeed", label: "can hit again below (hands/s)", min: 0.2, max: 5, step: 0.1 },
+  { kind: "number", group: "Doira", key: "doiraHitCooldownMs", label: "hand cooldown (ms)", min: 0, max: 300, step: 5 },
+  { kind: "number", group: "Doira", key: "doiraTapMinSpeed", label: "finger tap min speed (hands/s)", min: 0.5, max: 8, step: 0.1 },
+  { kind: "number", group: "Doira", key: "doiraTapFullSpeed", label: "finger tap full speed (hands/s)", min: 2, max: 20, step: 0.5 },
+  { kind: "number", group: "Doira", key: "doiraTapCooldownMs", label: "finger cooldown (ms)", min: 0, max: 200, step: 5 },
+  { kind: "number", group: "Doira", key: "doiraBumHz", label: "bum pitch (Hz)", min: 60, max: 250, step: 5 },
   { kind: "number", group: "Audio", key: "reverbMix", label: "reverb amount", min: 0, max: 1, step: 0.05 },
   { kind: "number", group: "Harp", key: "harpClearHoldMs", label: "clear-all hold (ms)", min: 500, max: 4000, step: 100 },
   { kind: "boolean", group: "Draw lag fix", key: "drawLeadEnabled", label: "draw skeleton ahead (by frame age)" },

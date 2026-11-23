@@ -8,6 +8,7 @@
 import dummyWorkletUrl from "./worklets/dummy.ts?worker&url";
 import ksWorkletUrl from "./worklets/ks-string.ts?worker&url";
 import type { PluckParams } from "./ksVoice";
+import { DoiraSynth, type DrumHit } from "./drum";
 import { makeImpulse } from "./reverb";
 
 const WET_GAIN_AT_FULL_MIX = 2.5;
@@ -27,6 +28,13 @@ export class AudioEngine {
   private ksNode: AudioWorkletNode | null = null;
   /** The string synth's bus: everything the harp plays goes through it into `input`. */
   readonly stringBus: GainNode;
+  /** The doira's bus and synth (made nodes per hit, see drum.ts). */
+  readonly drumBus: GainNode;
+  private readonly doira: DoiraSynth;
+  /** Drum hits played, and the time from "landmarks received" to "hit played" (ms). */
+  drumHitCount = 0;
+  lastHitDelayMs = 0;
+  maxHitDelayMs = 0;
 
   /** "ks-string" worklet (the harp's sound). */
   ksStatus: WorkletStatus = "not-started";
@@ -63,6 +71,11 @@ export class AudioEngine {
     this.stringBus = this.ctx.createGain();
     this.stringBus.gain.value = 0.9;
     this.stringBus.connect(this.input);
+
+    this.drumBus = this.ctx.createGain();
+    this.drumBus.gain.value = 0.9;
+    this.drumBus.connect(this.input);
+    this.doira = new DoiraSynth(this.ctx, this.drumBus);
 
     this.input.connect(this.master); // dry
 
@@ -132,6 +145,17 @@ export class AudioEngine {
       this.maxPluckDelayMs = Math.max(this.maxPluckDelayMs, this.lastPluckDelayMs);
     }
     return true;
+  }
+
+  /** Plays a doira hit now. `receivedAt` = performance.now() when the landmarks behind it arrived (for the panel). */
+  hitDrum(hit: DrumHit, receivedAt?: number): void {
+    void this.ctx.resume();
+    this.doira.play(hit);
+    this.drumHitCount++;
+    if (receivedAt !== undefined) {
+      this.lastHitDelayMs = performance.now() - receivedAt;
+      this.maxHitDelayMs = Math.max(this.maxHitDelayMs, this.lastHitDelayMs);
+    }
   }
 
   /** Fade out one string's voices (e.g. the string was deleted), or all of them. */

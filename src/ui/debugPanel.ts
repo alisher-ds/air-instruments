@@ -40,6 +40,9 @@ export interface DebugInfo {
     plucks: number;
     pluckDelayMs: number;
     pluckDelayMaxMs: number;
+    drumHits: number;
+    drumDelayMs: number;
+    drumDelayMaxMs: number;
   } | null;
   recording: { active: boolean; seconds: number; frames: number };
   canvas: { width: number; height: number };
@@ -249,6 +252,9 @@ export class DebugPanel {
       lines.push(`worklet     ${a.workletStatus}${sr}${err}`);
       lines.push(
         `strings     synth ${a.ksStatus}${a.ksError ? ` - ${a.ksError}` : ""} | ${a.plucks} plucks | landmarks received -> pluck sent to the audio thread: ${f(a.pluckDelayMs, 2)} ms last, ${f(a.pluckDelayMaxMs, 2)} ms max (target < 5)`,
+      );
+      lines.push(
+        `drum        ${a.drumHits} hits | landmarks received -> hit played: ${f(a.drumDelayMs, 2)} ms last, ${f(a.drumDelayMaxMs, 2)} ms max (target < 5)`,
       );
     }
     lines.push(
