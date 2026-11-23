@@ -22,6 +22,7 @@ export class AudioEngine {
   readonly input: GainNode;
   private readonly master: GainNode;
   private readonly limiter: DynamicsCompressorNode;
+  private recordDest: MediaStreamAudioDestinationNode | null = null;
   /** Reverb: everything on `input` is also sent through a convolver (a generated room), and the wet part joins the master. */
   private readonly reverbWet: GainNode;
   private dummyNode: AudioWorkletNode | null = null;
@@ -230,6 +231,15 @@ export class AudioEngine {
       this.workletError = e instanceof Error ? e.message : String(e);
       console.error("AudioWorklet failed to load:", e);
     }
+  }
+
+  /** The final mix (after the limiter) as a MediaStream, for "Record performance". Made on first use. */
+  get recordingStream(): MediaStream {
+    if (!this.recordDest) {
+      this.recordDest = this.ctx.createMediaStreamDestination();
+      this.limiter.connect(this.recordDest);
+    }
+    return this.recordDest.stream;
   }
 
   /** Reverb amount 0..1 (0 = dry). Smoothly ramped, so moving the slider never clicks. */

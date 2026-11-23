@@ -435,6 +435,11 @@ export class HandTracker {
     if (this.stream && this.appliedRes !== config.cameraRes) void this.reopenCamera();
   }
 
+  /** New camera frames per second as the browser sees them (cheap: no statistics are computed). 0 = not running. */
+  get cameraFps(): number {
+    return this.running ? this.cameraFpsEma : 0;
+  }
+
   getStats(): TrackerStats {
     const inf = this.inference.summary();
     const age = this.frameAge.summary();

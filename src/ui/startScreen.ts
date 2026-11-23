@@ -50,6 +50,7 @@ const ERROR_COPY: Record<TrackingErrorKind, ErrorCopy> = {
 
 export class StartScreen {
   private readonly root: HTMLElement;
+  private loadingNote: HTMLElement | null = null;
 
   constructor(parent: HTMLElement) {
     this.root = el("div", { class: "start-screen" });
@@ -72,12 +73,19 @@ export class StartScreen {
   }
 
   showLoading(message: string): void {
+    this.loadingNote = el("p", { class: "note", role: "status" });
     this.render(
       el("h1", { textContent: "Air Instruments" }),
       el("div", { class: "spinner" }),
       el("p", { class: "lead", textContent: message }),
+      this.loadingNote,
       el("p", { class: "privacy", textContent: "Video never leaves your device" }),
     );
+  }
+
+  /** A second line under the loading message (e.g. how long it has taken). */
+  setLoadingNote(text: string): void {
+    if (this.loadingNote) this.loadingNote.textContent = text;
   }
 
   showError(kind: TrackingErrorKind, onRetry: () => void): void {

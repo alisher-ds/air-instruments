@@ -222,6 +222,29 @@ export class Renderer {
     return this.canvas.height;
   }
 
+  /**
+   * Draws the whole picture (dimmed mirrored camera + effects + the sharp skeleton canvas) into `target` for "Record
+   * performance". The camera is a <video> element, so the canvas alone has no picture. Not used when not recording.
+   */
+  compose(target: CanvasRenderingContext2D, w: number, h: number, video: HTMLVideoElement | null): void {
+    target.setTransform(1, 0, 0, 1, 0, 0);
+    target.globalAlpha = 1;
+    target.fillStyle = BG;
+    target.fillRect(0, 0, w, h);
+    // In videoMode "canvas" the video is already inside the effects canvas.
+    if (config.videoMode === "element" && video && video.videoWidth > 0 && video.readyState >= 2) {
+      const fit = fitTransform(w, h, video.videoWidth, video.videoHeight, config.videoFit);
+      target.save();
+      target.translate(fit.offsetX + fit.drawWidth, fit.offsetY);
+      target.scale(-1, 1);
+      target.globalAlpha = 1 - Math.min(1, Math.max(0, config.videoDim));
+      target.drawImage(video, 0, 0, fit.drawWidth, fit.drawHeight);
+      target.restore();
+    }
+    target.drawImage(this.canvas, 0, 0, w, h);
+    if (this.overlay && this.overlayShown) target.drawImage(this.overlay, 0, 0, w, h);
+  }
+
   /** What the canvas is really doing, for the debug panel. */
   describe(): string {
     return `${config.videoMode === "element" ? "video element" : "video in canvas"} | scale ${config.renderScale} | 2D ${config.software2d ? "software (CPU)" : "GPU"}${config.testLoad ? " | test load ON" : ""}`;

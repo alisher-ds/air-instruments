@@ -3,11 +3,21 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Air Instruments</title>
+    <title>Air Instruments: play music in mid-air with your hands</title>
+    <meta
+      name="description"
+      content="Play a harp, a doira (frame drum), a theremin and an air piano with your bare hands, using only your webcam. Free, runs in your browser, your video never leaves your device."
+    />
+    <meta name="theme-color" content="#05060a" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <meta property="og:title" content="Air Instruments" />
+    <meta property="og:description" content="Play a harp, a drum, a theremin and a piano in mid-air with your hands. Just a webcam." />
+    <meta property="og:type" content="website" />
   </head>
   <body>
     <canvas id="stage"></canvas>
     <div id="ui"></div>
+    <noscript>Air Instruments needs JavaScript to run. Please turn it on in your browser.</noscript>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -5,10 +5,12 @@
 
 import "./style.css";
 import { AudioEngine } from "./audio/engine";
-import { config } from "./config";
+import { HAND_MODEL_URL, MEDIAPIPE_WASM_URL, config } from "./config";
+import { AssistHints } from "./core/assist";
 import { runBenchmark } from "./core/benchmark";
 import { MainLoop } from "./core/loop";
 import { Recorder, recordingFileName } from "./core/recording";
+import { PerformanceRecorder, recordingFileName as videoFileName } from "./core/videoRecorder";
 import { CaseCollector, formatCompareTable, runRenderCompare, type CompareRow } from "./core/renderBench";
 import { RollingStats } from "./core/rollingStats";
 import { loadSavedSettings, saveSettings } from "./core/settings";
@@ -49,7 +51,23 @@ let started = false;
 tracker.pipeline.setViewport(renderer.width, renderer.height);
 renderer.onResize = (w, h) => tracker.pipeline.setViewport(w, h);
 
-const hud = new Hud(ui, instruments, (i) => selectInstrument(i));
+const assist = new AssistHints();
+const videoRec = new PerformanceRecorder();
+const MAX_VIDEO_SECONDS = 300; // a 5 minute cap keeps the recording in memory small enough
+const hud = new Hud(
+  ui,
+  instruments,
+  (i) => selectInstrument(i),
+  {
+    onHelp: () => {
+      const ins = instruments[currentIndex];
+      if (ins) hud.showHint(ins.hint);
+    },
+    onFullscreen: toggleFullscreen,
+    onRecordVideo: toggleVideoRecord,
+  },
+  () => assist.dismiss(),
+);
 const debug = new DebugPanel(ui, {
   toggleRecord,
   beep: () => audio?.beep(),
@@ -179,6 +197,49 @@ tracker.onDelegateChange = (delegate) => {
   debug.syncTunables();
 };
 
+// --- fullscreen and video recording ---------------------------------------
+
+function toggleFullscreen(): void {
+  if (document.fullscreenElement) void document.exitFullscreen();
+  else void document.documentElement.requestFullscreen?.().catch(() => {});
+}
+
+/** "Record performance": picture + sound into a .webm file, downloaded when you stop. */
+function toggleVideoRecord(): void {
+  if (!started || !audio) return;
+  if (videoRec.recording) {
+    videoRec.stop();
+    return;
+  }
+  if (!PerformanceRecorder.supported()) {
+    hud.showNotice("Recording a video does not work in this browser. Please use the latest Chrome or Edge.");
+    return;
+  }
+  try {
+    videoRec.start(
+      { draw: (ctx, w, h) => renderer.compose(ctx, w, h, tracker.video) },
+      audio.recordingStream,
+      renderer.width,
+      renderer.height,
+      (blob) => {
+        hud.setVideoRecording(false, 0);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = videoFileName(new Date());
+        document.body.append(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      },
+    );
+    hud.setVideoRecording(true, 0);
+  } catch (e) {
+    console.error("Recording could not start:", e);
+    hud.showNotice("Recording could not start in this browser. Please use the latest Chrome or Edge.");
+  }
+}
+
 // --- recording -----------------------------------------------------------
 
 function toggleRecord(): void {
@@ -248,6 +309,18 @@ const loop = new MainLoop((_dt, now) => {
   if (now - debugTick > PANEL_INTERVAL_MS) {
     debugTick = now;
     hud.setRecording(recorder.recording, recorder.seconds);
+    if (videoRec.recording) {
+      hud.setVideoRecording(true, videoRec.seconds);
+      if (videoRec.seconds >= MAX_VIDEO_SECONDS) videoRec.stop();
+    }
+    // Friendly hints: a dim room (slow camera) or no hands in view.
+    const hint = assist.update(now, {
+      cameraFps: tracker.cameraFps,
+      hands: latestFrame ? latestFrame.hands.length : 0,
+      active: started && !document.hidden && !compareRunning,
+    });
+    if (hint) hud.showNotice(hint.text);
+    else hud.hideNotice();
     if (!debug.visible) return; // no stats work at all while the panel is hidden
     const js = renderJs.summary();
     const gaps = renderGap.summary();
@@ -323,12 +396,26 @@ async function startApp(): Promise<void> {
   await audio.start();
   audio.setReverbMix(config.reverbMix);
   startScreen.showLoading("Starting camera and loading hand tracking...");
+  // The first start downloads ~11 MB; say so, and say it kindly when it takes long.
+  const t0 = performance.now();
+  const timer = window.setInterval(() => {
+    const s = Math.round((performance.now() - t0) / 1000);
+    startScreen.setLoadingNote(
+      s < 5
+        ? "Allow the camera if your browser asks."
+        : s < 25
+          ? `Loading the hand model... ${s} s. The first start downloads about 11 MB; later starts are much faster.`
+          : `Still loading (${s} s). Your connection may be slow: you can keep waiting, or reload the page and try again.`,
+    );
+  }, 1000);
   try {
     await tracker.start();
   } catch (e) {
+    window.clearInterval(timer);
     showFailure(e instanceof TrackingError ? e.kind : "unknown");
     return;
   }
+  window.clearInterval(timer);
   startScreen.hide();
   started = true;
   hud.show();
@@ -363,6 +450,15 @@ window.addEventListener("keydown", (e) => {
       config.showHands = !config.showHands;
       debug.syncTunables();
       break;
+    case "f":
+      toggleFullscreen();
+      break;
+    case "v":
+      toggleVideoRecord();
+      break;
+    case "?":
+      hud.showHint(instruments[currentIndex]?.hint ?? "");
+      break;
   }
 });
 
@@ -382,3 +478,21 @@ document.addEventListener("visibilitychange", () => {
 Object.assign(window, { __air: { audio: () => audio, tracker, config } });
 
 startScreen.showStart(() => void onStart());
+prefetchTrackingFiles();
+
+/**
+ * The first start downloads ~11 MB (the hand model and MediaPipe's WASM). Starting that download while the player reads the
+ * start screen makes the click feel much faster. Skipped on data-saver or slow connections.
+ */
+function prefetchTrackingFiles(): void {
+  const conn = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+  if (conn?.saveData || /(^|-)2g$|^3g$/.test(conn?.effectiveType ?? "")) return;
+  const go = (): void => {
+    for (const url of [HAND_MODEL_URL, `${MEDIAPIPE_WASM_URL}/vision_wasm_internal.js`, `${MEDIAPIPE_WASM_URL}/vision_wasm_internal.wasm`]) {
+      fetch(url).catch(() => {}); // only warms the browser cache; failures are ignored (the real load reports errors)
+    }
+  };
+  const idle = (window as Window & { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
+  if (idle) idle.call(window, go, { timeout: 4000 });
+  else window.setTimeout(go, 2000);
+}

@@ -1,4 +1,5 @@
-// HUD: instrument switcher (4 slots, keys 1-4), the one-line hint, the key legend and the REC badge.
+// HUD: instrument switcher (4 slots, keys 1-4), the one-line hint, small tools (help, fullscreen, record video), a notice for
+// friendly hints ("more light on your hands"), the key legend and the REC badge for hand recordings.
 // The debug panel lives in debugPanel.ts.
 
 import type { Instrument } from "../instruments/Instrument";
@@ -6,14 +7,33 @@ import { el } from "./dom";
 
 const HINT_VISIBLE_MS = 6000;
 
+export interface HudTools {
+  /** "?" : show the how-to-play line of the current instrument again. */
+  onHelp(): void;
+  onFullscreen(): void;
+  /** Starts / stops recording the performance to a video file. */
+  onRecordVideo(): void;
+}
+
 export class Hud {
   private readonly buttons: HTMLButtonElement[] = [];
   private readonly hint: HTMLElement;
   private readonly rec: HTMLElement;
   private readonly root: HTMLElement;
+  private readonly notice: HTMLElement;
+  private readonly noticeText: HTMLElement;
+  private readonly videoButton: HTMLButtonElement;
   private hintTimer = 0;
+  private noticeShown = "";
 
-  constructor(parent: HTMLElement, instruments: Instrument[], onSelect: (index: number) => void) {
+  constructor(
+    parent: HTMLElement,
+    instruments: Instrument[],
+    onSelect: (index: number) => void,
+    tools: HudTools,
+    /** Called when the player closes a notice with its x button. */
+    onNoticeClosed: () => void = () => {},
+  ) {
     const bar = el("div", { class: "switcher" });
     instruments.forEach((ins, i) => {
       const b = el(
@@ -30,10 +50,38 @@ export class Hud {
     this.rec = el("div", { class: "rec hidden" });
     const legend = el("div", {
       class: "legend",
-      textContent: "1-4 instrument  ·  D debug  ·  R record hands  ·  H show hands",
+      textContent: "1-4 instrument  ·  ? help  ·  V record video  ·  F fullscreen  ·  H show hands  ·  D debug",
     });
 
-    this.root = el("div", { class: "hud hidden" }, bar, this.hint, this.rec, legend);
+    this.videoButton = el("button", {
+      class: "btn btn-small tool tool-record",
+      textContent: "● Record",
+      title: "Record your performance (picture + sound) to a video file you can share (V)",
+      onclick: () => tools.onRecordVideo(),
+    });
+    const tool = (text: string, title: string, onclick: () => void) => el("button", { class: "btn btn-small tool", textContent: text, title, onclick });
+    const toolbar = el(
+      "div",
+      { class: "tools" },
+      this.videoButton,
+      tool("?", "How to play this instrument (?)", () => tools.onHelp()),
+      tool("⛶", "Fullscreen (F)", () => tools.onFullscreen()),
+    );
+
+    this.noticeText = el("span", { class: "notice-text" });
+    const close = el("button", {
+      class: "notice-close",
+      textContent: "×",
+      title: "Close",
+      ariaLabel: "Close",
+      onclick: () => {
+        this.hideNotice();
+        onNoticeClosed();
+      },
+    });
+    this.notice = el("div", { class: "notice hidden", role: "status" }, this.noticeText, close);
+
+    this.root = el("div", { class: "hud hidden" }, bar, this.hint, toolbar, this.notice, this.rec, legend);
     parent.append(this.root);
   }
 
@@ -54,8 +102,29 @@ export class Hud {
     this.hintTimer = window.setTimeout(() => this.hint.classList.remove("visible"), HINT_VISIBLE_MS);
   }
 
+  /** A friendly message at the bottom of the screen (stays until hideNotice or the player closes it). */
+  showNotice(text: string): void {
+    if (this.noticeShown === text) return;
+    this.noticeShown = text;
+    this.noticeText.textContent = text;
+    this.notice.classList.remove("hidden");
+  }
+
+  hideNotice(): void {
+    this.noticeShown = "";
+    this.notice.classList.add("hidden");
+  }
+
   setRecording(active: boolean, seconds: number): void {
     this.rec.classList.toggle("hidden", !active);
     if (active) this.rec.textContent = `● REC ${seconds.toFixed(1)}s  (press R to stop and save)`;
+  }
+
+  /** The video recording button: "● Record" or "■ Stop 0:07". */
+  setVideoRecording(active: boolean, seconds: number): void {
+    this.videoButton.classList.toggle("recording", active);
+    const m = Math.floor(seconds / 60);
+    const s = String(Math.floor(seconds % 60)).padStart(2, "0");
+    this.videoButton.textContent = active ? `■ Stop ${m}:${s}` : "● Record";
   }
 }
