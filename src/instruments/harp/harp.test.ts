@@ -17,6 +17,21 @@ interface Spec {
   open?: number;
   /** Middle, ring and pinky folded into the palm (a closed fist; the thumb-index touch is then no real pinch). */
   fist?: boolean;
+  /** Middle, ring and pinky bent by this angle (radians) at the middle joint: a relaxed pinch posture is ~1.0-1.7. */
+  curl?: number;
+}
+
+/** The three outer fingers bent sideways by `angle` radians at the middle joint (curl = angle / 2.2). */
+function withCurl(pts: Array<{ x: number; y: number }>, angle: number): Array<{ x: number; y: number }> {
+  const out = pts.map((p) => ({ ...p }));
+  for (const mcp of [9, 13, 17]) {
+    const base = pts[mcp]!;
+    const pip = { x: base.x, y: base.y - 45 };
+    out[mcp + 1] = pip;
+    out[mcp + 2] = { x: pip.x + 22 * Math.sin(angle), y: pip.y - 22 * Math.cos(angle) };
+    out[mcp + 3] = { x: pip.x + 40 * Math.sin(angle), y: pip.y - 40 * Math.cos(angle) };
+  }
+  return out;
 }
 
 /** synthHand with the middle, ring and pinky folded: each tip comes back down past its middle joint (bend ~ 180 degrees). */
@@ -37,7 +52,8 @@ const INDEX_TIP = { x: -34, y: -182 };
 const wristFor = (px: number, py: number) => ({ x: px - INDEX_TIP.x, y: py - INDEX_TIP.y });
 
 function makeCfg(over: Partial<Config> = {}): HarpConfig {
-  return { ...DEFAULT_CONFIG, predictEnabled: false, ...over };
+  // harpReleaseGraceMs 0: the older tests release a pinch with ONE open frame; the flicker tests below turn the grace on.
+  return { ...DEFAULT_CONFIG, predictEnabled: false, harpReleaseGraceMs: 0, ...over };
 }
 
 class Rig {
@@ -55,7 +71,7 @@ class Rig {
     const frame = this.analyzer.analyze(
       hands.map((h) => {
         const lm = synthHand({ x: h.x, y: h.y, open: h.open ?? 1 });
-        return { id: h.id, landmarks: h.fist ? withFist(lm) : lm };
+        return { id: h.id, landmarks: h.fist ? withFist(lm) : h.curl ? withCurl(lm, h.curl) : lm };
       }),
       this.t,
       W,
@@ -316,6 +332,66 @@ describe("creating strings", () => {
     const ev = rig.step([{ id: 1, ...wristFor(500, 500), open: 0 }]);
     expect(ev.some((e) => e.type === "limit")).toBe(true);
     expect(rig.model.strings).toHaveLength(MAX_STRINGS);
+  });
+});
+
+describe("a pinch that flickers, and a relaxed pinch posture (the owner: 'lines are not drawn well, a grab does not hold')", () => {
+  it("a relaxed pinch (other fingers half bent, ~0.7 curl) can create a string", () => {
+    const rig = new Rig();
+    rig.step([{ id: 1, ...wristFor(300, 300), open: 1 }]);
+    for (let i = 0; i < 8; i++) rig.step([{ id: 1, ...wristFor(300 + i * 50, 300), open: 0, curl: 1.6 }]);
+    rig.step([{ id: 1, ...wristFor(700, 300), open: 1 }]);
+    expect(rig.model.strings).toHaveLength(1);
+  });
+
+  it("a real closed fist still cannot create a string, and says why", () => {
+    const rig = new Rig();
+    rig.step([{ id: 1, ...wristFor(300, 300), open: 1 }]);
+    for (let i = 0; i < 4; i++) rig.step([{ id: 1, ...wristFor(300 + i * 50, 300), open: 0, fist: true }]);
+    expect(rig.model.pinches[0]!.mode).toBe("ignored");
+    expect(rig.model.pinches[0]!.reason).toBe("fist");
+    rig.step([{ id: 1, ...wristFor(600, 300), open: 1 }]);
+    expect(rig.model.strings).toHaveLength(0);
+  });
+
+  it("a fist can still GRAB a string (grabbing is deliberate: it starts on a string)", () => {
+    const rig = new Rig();
+    const s = rig.model.addString({ x: 400, y: 200 }, { x: 400, y: 600 })!;
+    const p0 = wristFor(420, 400);
+    rig.step([{ id: 1, ...p0, open: 1 }]);
+    rig.step([{ id: 1, ...p0, open: 0, fist: true }]);
+    expect(rig.model.grabbed.has(s.id)).toBe(true);
+  });
+
+  it("a one-frame flicker of the pinch does not drop a grabbed string, and the string catches up afterwards", () => {
+    const rig = new Rig(makeCfg({ harpReleaseGraceMs: 120 }));
+    const s = rig.model.addString({ x: 400, y: 200 }, { x: 400, y: 600 })!;
+    const p0 = wristFor(420, 400);
+    rig.step([{ id: 1, ...p0, open: 1 }], 70);
+    rig.step([{ id: 1, ...p0, open: 0 }], 70);
+    rig.step([{ id: 1, ...wristFor(450, 400), open: 0 }], 70);
+    rig.step([{ id: 1, ...wristFor(480, 400), open: 1 }], 70); // flicker: tracking says "open" for ONE frame (70 ms)
+    expect(rig.model.grabbed.has(s.id)).toBe(true);
+    expect(rig.model.pinches).toHaveLength(1); // still drawn as held
+    rig.step([{ id: 1, ...wristFor(510, 400), open: 0 }], 70);
+    expect(rig.model.grabbed.has(s.id)).toBe(true);
+    expect(s.a.x).toBeCloseTo(400 + 90, 0); // followed the whole way: 420 -> 510
+    rig.step([{ id: 1, ...wristFor(510, 400), open: 1 }], 70);
+    rig.step([{ id: 1, ...wristFor(510, 400), open: 1 }], 70);
+    rig.step([{ id: 1, ...wristFor(510, 400), open: 1 }], 70); // a real release: open for 140 ms (grace 120 ms)
+    expect(rig.model.grabbed.size).toBe(0);
+    expect(rig.model.strings).toHaveLength(1);
+  });
+
+  it("a one-frame flicker while creating does not cancel the string", () => {
+    const rig = new Rig(makeCfg({ harpReleaseGraceMs: 120 }));
+    rig.step([{ id: 1, ...wristFor(300, 300), open: 1 }], 70);
+    for (let i = 0; i < 3; i++) rig.step([{ id: 1, ...wristFor(300 + i * 60, 300), open: 0 }], 70);
+    rig.step([{ id: 1, ...wristFor(480, 300), open: 1 }], 70); // flicker
+    for (let i = 0; i < 2; i++) rig.step([{ id: 1, ...wristFor(500 + i * 60, 300), open: 0 }], 70);
+    for (let i = 0; i < 3; i++) rig.step([{ id: 1, ...wristFor(620, 300), open: 1 }], 70); // a real release
+    expect(rig.model.strings).toHaveLength(1);
+    expect(rig.model.strings[0]!.b.x).toBeCloseTo(560, 0); // ends where the LAST real pinch frame was
   });
 });
 

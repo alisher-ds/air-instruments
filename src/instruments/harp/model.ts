@@ -35,6 +35,7 @@ export interface HarpConfig extends PredictConfig {
   harpPinchLockoutMs: number;
   harpFlickSpeed: number;
   harpMinPinchMs: number;
+  harpReleaseGraceMs: number;
   harpFistCurl: number;
   harpClearHoldMs: number;
 }
@@ -85,6 +86,12 @@ interface HandState {
   pinchEndedAt: number;
   /** Time the current pinch began (frame time). */
   pinchStartedAt: number;
+  /** Time of the last frame in which the pinch was really on. */
+  lastPinchAt: number;
+  /** Since when the pinch has been off while a grab / creation is still held (the release grace), or null. */
+  offSince: number | null;
+  /** Why a pinch was ignored (shown next to the ring). */
+  ignoreReason: string;
   /** Pinch point of the last frame in which the pinch was on. */
   lastPoint: Vec2;
   handSize: number;
@@ -107,6 +114,9 @@ function newState(): HandState {
     pinching: false,
     pinchEndedAt: -Infinity,
     pinchStartedAt: 0,
+    lastPinchAt: 0,
+    offSince: null,
+    ignoreReason: "",
     lastPoint: { x: 0, y: 0 },
     handSize: 100,
     grabId: -1,
@@ -189,6 +199,8 @@ export interface PinchView {
   mode: Mode;
   /** The string being grabbed (mode "grab"), else -1. */
   stringId: number;
+  /** Why the pinch is ignored ("fist", "limit"), else "". */
+  reason: string;
 }
 
 export class HarpModel {
@@ -333,12 +345,30 @@ export class HarpModel {
         this.hands.set(hand.id, st);
       }
       st.handSize = hand.handSize;
-      const pinchNow = hand.pinch.active;
+      // Tracking flickers: for one frame the thumb-index distance can jump over the OFF threshold while the player is still
+      // holding. A grab or a creation therefore waits harpReleaseGraceMs before it believes the pinch is over.
+      const pinchRaw = hand.pinch.active;
+      let pinchNow = pinchRaw;
+      let bridged = false;
+      if (pinchRaw) {
+        st.offSince = null;
+      } else if (st.pinching && (st.mode === "grab" || st.mode === "create")) {
+        st.offSince ??= now;
+        if (now - st.offSince < this.cfg.harpReleaseGraceMs) {
+          pinchNow = true;
+          bridged = true;
+        }
+      }
       if (pinchNow && !st.pinching) this.beginPinch(hand, st, now, events);
-      else if (!pinchNow && st.pinching) this.endPinch(st, now, events, false);
-      else if (pinchNow) this.holdPinch(hand, st, now);
+      else if (!pinchNow && st.pinching) {
+        st.offSince = null;
+        this.endPinch(st, now, events, false);
+      } else if (pinchNow && !bridged) this.holdPinch(hand, st, now);
       st.pinching = pinchNow;
-      if (pinchNow) st.lastPoint = hand.pinch.point;
+      if (pinchRaw) {
+        st.lastPoint = hand.pinch.point;
+        st.lastPinchAt = now;
+      }
     }
 
     // Pass 2: plucks (after the pinches, so a hand that just started pinching cannot pluck in the same frame).
@@ -366,11 +396,15 @@ export class HarpModel {
     const p = hand.pinch.point;
     st.lastPoint = p;
     st.pinchStartedAt = now;
-    if (isFist(hand, this.cfg.harpFistCurl)) {
-      st.mode = "ignored"; // a closing fist, not a pinch
+    st.lastPinchAt = now;
+    st.ignoreReason = "";
+    const hit = this.findGrab(p, hand.handSize);
+    if (!hit && isFist(hand, this.cfg.harpFistCurl)) {
+      // A closing fist touches thumb and index too. It cannot CREATE a string (grabbing an existing one is deliberate: allowed).
+      st.mode = "ignored";
+      st.ignoreReason = "fist";
       return;
     }
-    const hit = this.findGrab(p, hand.handSize);
     if (hit) {
       st.mode = "grab";
       st.grabId = hit.id;
@@ -381,6 +415,7 @@ export class HarpModel {
     }
     if (this.strings.length >= MAX_STRINGS) {
       st.mode = "ignored";
+      st.ignoreReason = "limit";
       events.push({ type: "limit" });
       return;
     }
@@ -397,16 +432,6 @@ export class HarpModel {
   }
 
   private holdPinch(hand: Hand, st: HandState, now: number): void {
-    if (st.mode === "create" && isFist(hand, this.cfg.harpFistCurl)) {
-      // The hand closed into a fist while "creating": that was no pinch. Cancel and free the partner.
-      if (st.partner >= 0) {
-        const partner = this.hands.get(st.partner);
-        if (partner) partner.partner = -1;
-      }
-      st.mode = "ignored";
-      st.partner = -1;
-      return;
-    }
     if (st.mode !== "grab") return;
     const s = this.stringById(st.grabId);
     if (!s) {
@@ -450,7 +475,10 @@ export class HarpModel {
         partner.partner = -1;
       }
       // Held long enough (a quick touch of thumb and index while playing makes nothing) and long enough in space.
-      const heldMs = Math.min(now - st.pinchStartedAt, partner && partner.pinching ? now - partner.pinchStartedAt : Infinity);
+      const heldMs = Math.min(
+        st.lastPinchAt - st.pinchStartedAt,
+        partner && partner.pinching ? partner.lastPinchAt - partner.pinchStartedAt : Infinity,
+      );
       if (heldMs >= this.cfg.harpMinPinchMs && dist(a, b) >= this.cfg.harpMinStringHands * size) {
         const s = this.addString(a, b);
         if (s) events.push({ type: "created", id: s.id });
@@ -471,14 +499,24 @@ export class HarpModel {
   private buildViews(hands: readonly Hand[]): void {
     for (const hand of hands) {
       const st = this.hands.get(hand.id);
-      if (!st || !hand.pinch.active) continue;
-      this.pinches.push({ handId: hand.id, point: hand.pinch.point, mode: st.mode, stringId: st.mode === "grab" ? st.grabId : -1 });
+      if (!st || !st.pinching) continue;
+      // During a bridged flicker the hand says "open", but the pinch is still being held: show it where it was.
+      const point = hand.pinch.active ? hand.pinch.point : st.lastPoint;
+      this.pinches.push({
+        handId: hand.id,
+        point,
+        mode: st.mode,
+        stringId: st.mode === "grab" ? st.grabId : -1,
+        reason: st.mode === "ignored" ? st.ignoreReason : "",
+      });
       if (st.mode !== "create") continue;
       if (st.partner >= 0) {
         const other = hands.find((x) => x.id === st.partner);
-        if (other && hand.id < other.id) this.preview = { a: hand.pinch.point, b: other.pinch.point, double: true, handA: hand.id, handB: other.id };
+        const otherState = other ? this.hands.get(other.id) : undefined;
+        const otherPoint = other && otherState ? (other.pinch.active ? other.pinch.point : otherState.lastPoint) : null;
+        if (other && otherPoint && hand.id < other.id) this.preview = { a: point, b: otherPoint, double: true, handA: hand.id, handB: other.id };
       } else {
-        this.preview = { a: st.createStart, b: hand.pinch.point, double: false, handA: -1, handB: hand.id };
+        this.preview = { a: st.createStart, b: point, double: false, handA: -1, handB: hand.id };
       }
     }
   }

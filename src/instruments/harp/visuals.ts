@@ -352,6 +352,12 @@ export class HarpView {
       ctx.beginPath();
       ctx.arc(p.point.x + sh.x, p.point.y + sh.y, p.mode === "grab" ? 16 : 12, 0, Math.PI * 2);
       ctx.stroke();
+      if (p.reason) {
+        // Tell the player why nothing happens (a pinch that is ignored must not look like a broken app).
+        ctx.fillStyle = "rgba(255,255,255,0.7)";
+        ctx.font = "12px system-ui, sans-serif";
+        ctx.fillText(p.reason === "fist" ? "closed hand: open the other fingers" : "12 strings: remove one first", p.point.x + sh.x + 18, p.point.y + sh.y + 4);
+      }
     }
   }
 

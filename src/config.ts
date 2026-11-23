@@ -115,6 +115,8 @@ export interface Config {
   harpMinPinchMs: number;
   /** A hand whose middle, ring and pinky are bent more than this (0..1, average) is a fist: its thumb-index touch is not a pinch. */
   harpFistCurl: number;
+  /** A grab or creation keeps going this long after the pinch seems to open (tracking flickers). ms. */
+  harpReleaseGraceMs: number;
   /** Both open palms held still this long clear all strings. ms. */
   harpClearHoldMs: number;
 
@@ -222,8 +224,9 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   harpPluckFullSpeed: 6,
   harpPinchLockoutMs: 250,
   harpFlickSpeed: 9,
-  harpMinPinchMs: 150,
-  harpFistCurl: 0.7,
+  harpMinPinchMs: 120,
+  harpFistCurl: 0.9,
+  harpReleaseGraceMs: 120,
   harpTone: 0.55,
   doiraRadiusFrac: 0.2,
   doiraHitMinSpeed: 2.5,
@@ -321,6 +324,7 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "Harp", key: "harpFlickSpeed", label: "flick-delete speed (hands/s)", min: 2, max: 20, step: 0.5 },
   { kind: "number", group: "Harp", key: "harpMinPinchMs", label: "pinch held at least (ms)", min: 0, max: 600, step: 10 },
   { kind: "number", group: "Harp", key: "harpFistCurl", label: "fist = other fingers bent more than", min: 0.3, max: 1, step: 0.05 },
+  { kind: "number", group: "Harp", key: "harpReleaseGraceMs", label: "keep holding after pinch flickers (ms)", min: 0, max: 400, step: 10 },
   { kind: "number", group: "Harp", key: "harpTone", label: "tone (dark .. bright)", min: 0, max: 1, step: 0.05 },
   { kind: "number", group: "Doira", key: "doiraRadiusFrac", label: "drum size (x screen height)", min: 0.1, max: 0.4, step: 0.01 },
   { kind: "number", group: "Doira", key: "doiraHitMinSpeed", label: "hit min speed (hands/s)", min: 0.5, max: 8, step: 0.1 },
