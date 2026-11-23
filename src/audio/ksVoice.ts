@@ -45,6 +45,9 @@ class Voice {
   attackLeft = 0;
   gl = 0.7;
   gr = 0.7;
+  /** Output tone: a one-pole lowpass (coefficient and state), so a soft pluck is warm and a hard one brighter. */
+  toneA = 1;
+  toneY = 0;
   /** Monotonic start order, for "oldest first". */
   serial = 0;
 }
@@ -155,6 +158,12 @@ export class KsSynth {
     const level = (0.08 + 0.52 * velocity) / rms; // output RMS ~ 0.08 .. 0.6 of full scale before the master limiter
     for (let i = 0; i < L; i++) v.buf[i] = v.buf[i]! * level;
 
+    // Warmth: the output lowpass runs from ~0.6 kHz (brightness 0) to ~11 kHz (brightness 1). It sits outside the string
+    // loop, so it does not touch the tuning.
+    const fc = Math.min(sr * 0.45, 600 * Math.pow(2, brightness * 4.2));
+    v.toneA = 1 - Math.exp((-2 * Math.PI * fc) / sr);
+    v.toneY = 0;
+
     const pan = Number.isFinite(p.pan) ? Math.min(1, Math.max(-1, p.pan)) : 0;
     v.gl = Math.cos(((pan + 1) * Math.PI) / 4);
     v.gr = Math.sin(((pan + 1) * Math.PI) / 4);
@@ -186,6 +195,8 @@ export class KsSynth {
       let apy = v.apy;
       let gain = v.gain;
       let attackLeft = v.attackLeft;
+      let toneY = v.toneY;
+      const toneA = v.toneA;
       const c = v.c;
       const g = v.loopGain;
       const rel = v.releasing;
@@ -199,7 +210,8 @@ export class KsSynth {
         buf[pos] = ap * g;
         pos = next;
 
-        let out = s * gain;
+        toneY += toneA * (s - toneY);
+        let out = toneY * gain;
         if (attackLeft > 0) {
           out *= 1 - attackLeft / attackSamples;
           attackLeft--;
@@ -213,6 +225,7 @@ export class KsSynth {
       v.apy = apy;
       v.gain = gain;
       v.attackLeft = attackLeft;
+      v.toneY = toneY;
       v.age += n;
       if (!Number.isFinite(apy) || gain < 0.001 || v.age >= v.life) {
         v.active = false;

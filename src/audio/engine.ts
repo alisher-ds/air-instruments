@@ -8,6 +8,9 @@
 import dummyWorkletUrl from "./worklets/dummy.ts?worker&url";
 import ksWorkletUrl from "./worklets/ks-string.ts?worker&url";
 import type { PluckParams } from "./ksVoice";
+import { makeImpulse } from "./reverb";
+
+const WET_GAIN_AT_FULL_MIX = 2.5;
 
 export type WorkletStatus = "not-started" | "loading" | "ok" | "failed";
 
@@ -17,6 +20,8 @@ export class AudioEngine {
   readonly input: GainNode;
   private readonly master: GainNode;
   private readonly limiter: DynamicsCompressorNode;
+  /** Reverb: everything on `input` is also sent through a convolver (a generated room), and the wet part joins the master. */
+  private readonly reverbWet: GainNode;
   private dummyNode: AudioWorkletNode | null = null;
   /** The string synth (ONE node, all voices inside). null until its worklet has loaded. */
   private ksNode: AudioWorkletNode | null = null;
@@ -59,7 +64,21 @@ export class AudioEngine {
     this.stringBus.gain.value = 0.9;
     this.stringBus.connect(this.input);
 
-    this.input.connect(this.master);
+    this.input.connect(this.master); // dry
+
+    // Reverb send -> generated impulse response -> wet gain -> master (all before the limiter).
+    const convolver = this.ctx.createConvolver();
+    const ir = makeImpulse(this.ctx.sampleRate);
+    const irBuffer = this.ctx.createBuffer(2, ir.left.length, this.ctx.sampleRate);
+    irBuffer.copyToChannel(ir.left, 0);
+    irBuffer.copyToChannel(ir.right, 1);
+    convolver.buffer = irBuffer;
+    this.reverbWet = this.ctx.createGain();
+    this.reverbWet.gain.value = 0.3 * WET_GAIN_AT_FULL_MIX;
+    this.input.connect(convolver);
+    convolver.connect(this.reverbWet);
+    this.reverbWet.connect(this.master);
+
     this.master.connect(this.limiter);
     this.limiter.connect(this.ctx.destination);
   }
@@ -149,6 +168,14 @@ export class AudioEngine {
       this.workletError = e instanceof Error ? e.message : String(e);
       console.error("AudioWorklet failed to load:", e);
     }
+  }
+
+  /** Reverb amount 0..1 (0 = dry). Smoothly ramped, so moving the slider never clicks. */
+  setReverbMix(mix: number): void {
+    const m = Math.min(1, Math.max(0, Number.isFinite(mix) ? mix : 0));
+    // The convolver is normalised, so its tail is quiet next to the dry sound: mix 1 = wet gain 2.5 (measured: at mix 0.3 the
+    // wet peak is about -12 dB under the dry one, a light room).
+    this.reverbWet.gain.setTargetAtTime(m * WET_GAIN_AT_FULL_MIX, this.ctx.currentTime, 0.03);
   }
 
   /** Short quiet 440 Hz tone from the worklet, to hear that the whole chain works. */

@@ -53,14 +53,14 @@ export function createHarp(): Instrument {
           if (!s) break;
           const fire = (at: number | undefined): void => {
             const ok = audio?.pluck(
-              { stringId: s.id, freq: s.freq, velocity: e.strength, brightness: e.brightness, pan: pan(s.a, s.b) },
+              { stringId: s.id, freq: s.freq, velocity: e.strength, brightness: e.brightness * (0.35 + 0.65 * config.harpTone), pan: pan(s.a, s.b) },
               at,
             );
             if (ok === false && !noSynthWarned) {
               noSynthWarned = true;
               view.showToast("The string sound is not available (audio worklet failed).", performance.now(), 6000);
             }
-            view.pluck(s, e.strength, e.contact);
+            view.pluck(s, e.strength, e.contact, e.along);
           };
           if (e.delayMs >= 2) {
             // A fast strum crossed several strings inside one tracking frame: keep them in crossing order.

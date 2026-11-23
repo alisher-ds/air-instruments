@@ -1,6 +1,33 @@
 # HANDOFF
 
-Current state: **Stage 1 (harp) finished** (2026-11-23): strings, plucking, Karplus-Strong sound, scales, create/grab/delete/undo/clear. Everything is tested with synthetic hands and the sound was checked in a real browser, but **I have never seen it with real hands**: the owner's test decides whether plucks are missed or false. Before it, Stage 0.7 (render cost) closed: render capped at 30 fps; two-hand inference is ~70 ms on his Iris Xe whatever the render does (see the "Stage 0.7" sections below). PLAN.md section 5 rule was reworded as the owner approved.
+Current state: **Stage 2 (harp polish) finished** (2026-11-23): reverb, a warmer pluck, richer string vibration and glow. Stage 1 (harp) and its tuning round 1 are below. **Nothing of Stage 1 or 2 has been tested with an updated report from the owner** since tuning round 1 (he was asked to press Reset in the panel and play again). Render stays capped at 30 fps; two-hand inference is ~70 ms on his Iris Xe (Stage 0.7). Next: the owner listens/plays (see "Stage 2 — next step"), then tune, then Stage 3 (doira).
+
+## Stage 2 — what was done (2026-11-23)
+
+Scope: audio and visual polish of the harp (PLAN.md section 8, Stage 2). Tests: **177 passing**; `npm run build` passes; checked in the real browser (production preview).
+
+**Audio**
+1. **Reverb** (`src/audio/reverb.ts` + `engine.ts`): a generated stereo impulse response (2.2 s RT60, 12 ms pre-delay, a tail that gets darker with time, different noise per channel; no audio files) in a `ConvolverNode`. Chain: instrument buses -> `input` (dry) -> master, and `input` -> convolver -> wet gain -> master; master -> soft limiter -> output (so the reverb sits before the limiter as PLAN.md says). Slider **reverb amount** (panel group Audio, default 0.3, saved; 0 = dry). It is ramped (no clicks). Measured in the browser: at 0.3 the wet peak was ~-12 dB under the dry one (I first had it ~-20 dB, too quiet, and scaled the wet gain x2.5 at full mix). I have NOT heard it.
+2. **Warmer pluck** (`ksVoice.ts`): a one-pole lowpass on each voice's output, outside the string loop (tuning unchanged, tests still 4 cents), from ~0.6 kHz (soft) to ~11 kHz (hard). The harp scales every pluck's brightness by the new **tone** slider (group Harp, default 0.55; 0 = dark/soft, 1 = bright). The owner said "ovoz sifati" without saying what was wrong, so these are my best guess (the raw Karplus-Strong noise burst is bright and dry). **Please ask him which word fits and tune `tone` / `reverb amount` from it.**
+
+**Visual** (`harp/visuals.ts`, rewritten)
+- Vibration shaped by where the string was struck: the three lowest modes with `sin(n pi u) / n^1.4` amplitudes (struck mid-string = one big arc, near an end = ripples); higher modes die faster. The wobble is 4 / 8 / 12 Hz (before: 9 and ~21 Hz, which aliases at the 30 fps render cap).
+- Glow nodes at both string ends, brighter and larger after a pluck; a flash at the contact point and a ring spreading out from it (pool of 24); sparks now drift upward (pool of 96); a resting string shimmers very slightly (no full-screen effect).
+- Per-frame cost stays small: all sprites pre-rendered, colour strings built once, fixed pools, no shadowBlur, no full-screen pass. Approximate draw calls with 12 strings: 36 strokes + 24 node sprites + up to 24 ripple sprites/rings + up to 96 sparks.
+- Hand-following things (preview line, rings, grabbed string) keep the draw-ahead shift from Stage 1. Strings are static, so they need no interpolation.
+
+**NOT done / NOT verified**
+- **Performance with the real effects on the owner's laptop is unmeasured.** The synthetic load in "Compare render settings" is about as heavy as 12 strings plus 120 sprites, so the harp should be near it, but the harp is not in that comparison. Cap stays 30 (PLAN.md section 5). If inference rises when strings ring, compare with the panel (render cap 30 vs 20).
+- I have not heard the reverb or the new tone, and have not seen the new visuals with real hands. "Looks at least as good as the reference video" is the owner's judgement.
+- Not built (could be next): per-string decay differences, a pluck "body" resonance, hand-trail effect, an idle animation of the whole scene, mobile layout.
+
+**Tunables new in Stage 2:** `reverb amount` 0.3 (group Audio), `tone` 0.55 (group Harp).
+
+## Stage 2 — next step (exact)
+
+1. **Owner:** press **Reset** in the panel (D), play the harp for a few minutes with the new sound, and tell the agent (buttons are fine): is the reverb too much / too little (slider `reverb amount`), is the sound better, which word fits what he hears (dry / harsh / too quiet / too long / good), do the visuals look good, does it still run smoothly (the panel's render fps and the `inference` line while strings are ringing). He can move `tone` and `reverb amount` live and say which values he likes; **Copy config** gives the JSON.
+2. **Agent:** set the defaults from his values; fix anything he reports. If the render slows tracking when many strings ring, compare render cap 30 vs 20 or trim the sparks/ripples pools.
+3. Then **Stage 3: Doira** (PLAN.md 6.2). Use the same pattern as the harp: pure logic in `instruments/doira/model.ts` with tests on synthetic hands, sound synthesized (pitched sine with a drop for "bum", filtered noise burst for "tak", short metallic noise for jingles) in the audio engine, cheap visuals.
 
 ## Stage 1 — what was built
 

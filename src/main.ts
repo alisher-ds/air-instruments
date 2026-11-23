@@ -55,6 +55,7 @@ const debug = new DebugPanel(ui, {
   beep: () => audio?.beep(),
   applyConfig: () => {
     tracker.applySettings();
+    audio?.setReverbMix(config.reverbMix);
     saveSettings(config);
   },
   resetNumbers: () => {
@@ -301,6 +302,7 @@ async function onStart(): Promise<void> {
     }
   }
   await audio.start();
+  audio.setReverbMix(config.reverbMix);
   startScreen.showLoading("Starting camera and loading hand tracking...");
   try {
     await tracker.start();

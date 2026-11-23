@@ -118,6 +118,13 @@ export interface Config {
   /** Both open palms held still this long clear all strings. ms. */
   harpClearHoldMs: number;
 
+  /** 0 = dark and soft, 1 = bright. Scales how bright every pluck sounds. */
+  harpTone: number;
+
+  // --- audio (all instruments) ---
+  /** Reverb amount 0..1. */
+  reverbMix: number;
+
   // --- recording ---
   recordMaxSeconds: number;
 }
@@ -175,6 +182,8 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   harpFlickSpeed: 9,
   harpMinPinchMs: 150,
   harpFistCurl: 0.7,
+  harpTone: 0.55,
+  reverbMix: 0.3,
   harpClearHoldMs: 1500,
 
   recordMaxSeconds: 60,
@@ -250,6 +259,8 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "Harp", key: "harpFlickSpeed", label: "flick-delete speed (hands/s)", min: 2, max: 20, step: 0.5 },
   { kind: "number", group: "Harp", key: "harpMinPinchMs", label: "pinch held at least (ms)", min: 0, max: 600, step: 10 },
   { kind: "number", group: "Harp", key: "harpFistCurl", label: "fist = other fingers bent more than", min: 0.3, max: 1, step: 0.05 },
+  { kind: "number", group: "Harp", key: "harpTone", label: "tone (dark .. bright)", min: 0, max: 1, step: 0.05 },
+  { kind: "number", group: "Audio", key: "reverbMix", label: "reverb amount", min: 0, max: 1, step: 0.05 },
   { kind: "number", group: "Harp", key: "harpClearHoldMs", label: "clear-all hold (ms)", min: 500, max: 4000, step: 100 },
   { kind: "boolean", group: "Draw lag fix", key: "drawLeadEnabled", label: "draw skeleton ahead (by frame age)" },
   { kind: "number", group: "Draw lag fix", key: "drawLeadMaxMs", label: "max lead (ms)", min: 0, max: 300, step: 10 },
