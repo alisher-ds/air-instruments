@@ -38,6 +38,19 @@ export function createPiano(): Instrument {
     }
   }
 
+  const EASE = { Easy: 0.7, Normal: 1, Strict: 1.4 } as const;
+  const easeButtons: Array<[string, HTMLButtonElement]> = [];
+
+  function setEase(name: keyof typeof EASE): void {
+    config.pianoEase = EASE[name];
+    saveSettings(config);
+    markEase();
+  }
+
+  function markEase(): void {
+    for (const [name, b] of easeButtons) b.classList.toggle("btn-accent", Math.abs(EASE[name as keyof typeof EASE] - config.pianoEase) < 0.05);
+  }
+
   function octave(delta: number): void {
     config.pianoLowOctave = Math.max(2, Math.min(5, config.pianoLowOctave + delta));
     saveSettings(config);
@@ -47,7 +60,7 @@ export function createPiano(): Instrument {
   return {
     id: "piano",
     name: "Air piano",
-    hint: "Bend a finger over a key as if pressing it: the note plays while you hold it and stops when you straighten it. Use several fingers for chords. Moving the whole hand plays nothing.",
+    hint: "Hold your palm toward the camera, fingers up, above the keys. Bend a finger toward your palm like pressing a button: the ring on its tip fills up and the note plays; straighten it to stop. Several fingers = a chord. If notes are missed, press Easy.",
 
     init(a: AudioEngine): void {
       audio = a;
@@ -56,10 +69,23 @@ export function createPiano(): Instrument {
       model.setViewport(viewW, viewH);
       bar = el(
         "div",
-        { class: "harp-bar", style: "bottom: auto; top: 110px" },
+        { class: "harp-bar", style: "bottom: auto; top: 160px" },
         el("button", { class: "btn btn-small", textContent: "◀ Octave", title: "Keys one octave lower", onclick: () => octave(-1) }),
         el("button", { class: "btn btn-small", textContent: "Octave ▶", title: "Keys one octave higher", onclick: () => octave(1) }),
+        el("span", { class: "harp-label", textContent: "Sensitivity:" }),
       );
+      easeButtons.length = 0;
+      for (const name of Object.keys(EASE) as Array<keyof typeof EASE>) {
+        const b = el("button", {
+          class: "btn btn-small",
+          textContent: name,
+          title: name === "Easy" ? "Plays with a small, slow bend (more accidental notes)" : name === "Strict" ? "Needs a clear, quick bend (fewer accidental notes)" : "In between",
+          onclick: () => setEase(name),
+        });
+        easeButtons.push([name, b]);
+        bar.append(b);
+      }
+      markEase();
       document.getElementById("ui")?.append(bar);
     },
 
@@ -84,7 +110,7 @@ export function createPiano(): Instrument {
           for (let k = first; k < 5; k++) {
             const pos = extrapolate(h.tips[k]!, h.tipVelocity[k]!, age, MAX_LEAD_HANDS * h.handSize);
             const id = h.id * 8 + k;
-            tips.push({ id, pos, down: model.down.size > 0 && [...model.down.values()].includes(id) });
+            tips.push({ id, pos, down: model.down.size > 0 && [...model.down.values()].includes(id), fill: model.meter.get(id) ?? 0 });
           }
         }
       }

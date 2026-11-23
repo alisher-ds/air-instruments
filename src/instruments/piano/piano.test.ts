@@ -4,7 +4,8 @@ import { describe, expect, it } from "vitest";
 import { DEFAULT_CONFIG, type Config } from "../../config";
 import { HandPipeline } from "../../core/tracking";
 import { synthHand } from "../../../test/helpers/synthHand";
-import { PianoModel, pressVelocity, type PianoConfig, type PianoEvent } from "./model";
+import { layoutKeys } from "./layout";
+import { PianoModel, fingerFlex, pressProgress, pressVelocity, type PianoConfig, type PianoEvent } from "./model";
 
 const W = 1280;
 const H = 720;
@@ -31,6 +32,17 @@ function bendFinger(pts: Array<{ x: number; y: number }>, k: number, angle: numb
   pts[tipIdx] = { x: pip.x + dir.x * L, y: pip.y + dir.y * L };
 }
 
+/** The finger gets SHORTER in the picture (bending toward the camera): the joints and the tip move toward the knuckle, the joint angle stays 0. */
+function shortenFinger(pts: Array<{ x: number; y: number }>, k: number, amount: number): void {
+  if (amount <= 0) return;
+  const m = MCP[k]!;
+  const base = k === 0 ? pts[2]! : pts[m]!;
+  for (const i of k === 0 ? [3, 4] : [m + 1, m + 2, m + 3]) {
+    const p = pts[i]!;
+    pts[i] = { x: base.x + (p.x - base.x) * (1 - amount), y: base.y + (p.y - base.y) * (1 - amount) };
+  }
+}
+
 interface HandSpec {
   id?: number;
   /** Wrist position. */
@@ -38,6 +50,8 @@ interface HandSpec {
   y: number;
   /** Bend angles per finger (thumb..pinky), radians. */
   bend?: number[];
+  /** Per finger: how much shorter it looks (0..1), without any joint-angle change. */
+  shorten?: number[];
   open?: number;
 }
 
@@ -62,6 +76,7 @@ class Rig {
     const det = hands.map((h) => {
       const lm = synthHand({ x: h.x, y: h.y, open: h.open ?? 1 });
       (h.bend ?? []).forEach((a, k) => bendFinger(lm, k, a));
+      (h.shorten ?? []).forEach((a, k) => shortenFinger(lm, k, a));
       return lm.map((p) => ({ x: 1 - p.x / W, y: p.y / H }));
     });
     const frame = this.pipe.process(det, this.t);
@@ -99,12 +114,80 @@ function pressAndRelease(rig: Rig, base: HandSpec, k: number, to: number, frames
 
 describe("pressVelocity", () => {
   it("is 0.2..1, louder for faster presses", () => {
-    expect(pressVelocity(1.5, 1, 1.5, 7)).toBeGreaterThanOrEqual(0.2);
-    expect(pressVelocity(7, 3, 1.5, 7)).toBeCloseTo(1);
-    expect(pressVelocity(3, 1, 1.5, 7)).toBeCloseTo(pressVelocity(3, 0, 1.5, 7), 5); // the louder of the two measures wins
-    expect(pressVelocity(0, 7, 1.5, 7)).toBeCloseTo(1); // a fast curl alone is a loud press
-    expect(pressVelocity(5, 3, 1.5, 7)).toBeGreaterThan(pressVelocity(2.5, 3, 1.5, 7));
-    expect(pressVelocity(100, 99, 1.5, 7)).toBeLessThanOrEqual(1);
+    expect(pressVelocity(1.5, 1, 0.4, 1.5, 7)).toBeGreaterThanOrEqual(0.2);
+    expect(pressVelocity(7, 3, 1, 1.5, 7)).toBeCloseTo(1);
+    expect(pressVelocity(3, 1, 0.4, 1.5, 7)).toBeCloseTo(pressVelocity(3, 0, 0, 1.5, 7), 5); // the loudest of the measures wins
+    expect(pressVelocity(0, 7, 0, 1.5, 7)).toBeCloseTo(1); // a fast curl alone is a loud press
+    expect(pressVelocity(0, 0, 3, 1.5, 7)).toBeCloseTo(1); // so is a fast shortening
+    expect(pressVelocity(5, 3, 0.4, 1.5, 7)).toBeGreaterThan(pressVelocity(2.5, 3, 0.4, 1.5, 7));
+    expect(pressVelocity(100, 99, 99, 1.5, 7)).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("flex: what a webcam really sees when a finger bends toward it", () => {
+  it("fingerFlex is ~0 for a straight finger and grows when the finger looks shorter", () => {
+    const rig = new Rig();
+    rig.step([{ x: WX, y: wristY(KEY_Y) }]);
+    const straight = rig.pipe.process([[...synthHand({ x: WX, y: wristY(KEY_Y) })].map((p) => ({ x: 1 - p.x / W, y: p.y / H }))], rig.t + 33).hands[0]!;
+    const lm = synthHand({ x: WX, y: wristY(KEY_Y) });
+    shortenFinger(lm, 1, 0.3);
+    const rig2 = new Rig();
+    rig2.step([{ x: WX, y: wristY(KEY_Y), shorten: [0, 0.3, 0, 0, 0] }]);
+    const shortHand = rig2.pipe.process([lm.map((p) => ({ x: 1 - p.x / W, y: p.y / H }))], rig2.t + 33).hands[0]!;
+    expect(fingerFlex(straight, 1)).toBeLessThan(0.15);
+    expect(fingerFlex(shortHand, 1)).toBeGreaterThan(fingerFlex(straight, 1) + 0.15);
+  });
+
+  it("a finger that only gets SHORTER (joint angle unchanged) still plays the key: the common real-life press", () => {
+    const rig = new Rig();
+    const base: HandSpec = { x: WX, y: wristY(KEY_Y) };
+    hold(rig, base, 8);
+    for (let i = 1; i <= 3; i++) rig.step([{ ...base, shorten: [0, (0.3 * i) / 3, 0, 0, 0] }]);
+    for (let i = 0; i < 4; i++) rig.step([{ ...base, shorten: [0, 0.3, 0, 0, 0] }]);
+    expect(rig.ons()).toHaveLength(1);
+    expect(rig.ons()[0]!.flexRise).toBeGreaterThan(rig.ons()[0]!.curlRise);
+    for (let i = 2; i >= 0; i--) rig.step([{ ...base, shorten: [0, (0.3 * i) / 3, 0, 0, 0] }]);
+    expect(rig.offs()).toHaveLength(1);
+  });
+
+  it("the play key is the key where the finger RESTED, not the neighbour it drifts into while bending", () => {
+    const rig = new Rig();
+    const l = layoutKeys(W, H, 2, 4);
+    const e = l.keys.find((k) => k.midi === 64)!;
+    const boundary = e.x + e.w; // E | F: no black key in between
+    const wx = boundary - 15 + 34; // the index tip (wrist - 34) rests 15 px left of the boundary, in E
+    const base: HandSpec = { x: wx, y: wristY(KEY_Y) };
+    hold(rig, base, 8);
+    pressAndRelease(rig, base, 1, 1.4, 3); // the bend swings the tip ~45 px to the right, into F
+    expect(rig.ons().length).toBeGreaterThanOrEqual(1);
+    expect(rig.ons()[0]!.midi).toBe(64);
+  });
+
+  it("the fingertip meter fills as the finger bends and is back at ~0 at rest", () => {
+    const rig = new Rig();
+    const base: HandSpec = { x: WX, y: wristY(KEY_Y) };
+    hold(rig, base, 8);
+    const id = [...rig.model.meter.keys()].find((k) => k % 8 === 1)!;
+    expect(rig.model.meter.get(id)!).toBeLessThan(0.15);
+    rig.step([{ ...base, shorten: [0, 0.12, 0, 0, 0] }]);
+    const partway = rig.model.meter.get(id)!;
+    expect(partway).toBeGreaterThan(0.1);
+    expect(pressProgress(2, 0)).toBeGreaterThan(1); // a strong signal alone is a press
+    expect(pressProgress(1, 0.5)).toBeCloseTo(1); // one at its minimum + half of the other is a press
+    expect(pressProgress(0.1, 0.1)).toBeLessThan(0.3);
+  });
+
+  it("sensitivity: a small, slow bend plays in Easy but not in Strict", () => {
+    const run = (ease: number) => {
+      const rig = new Rig(makeCfg({ pianoEase: ease }));
+      const base: HandSpec = { x: WX, y: wristY(KEY_Y) };
+      hold(rig, base, 8);
+      for (let i = 1; i <= 3; i++) rig.step([{ ...base, shorten: [0, (0.09 * i) / 3, 0, 0, 0] }]);
+      for (let i = 0; i < 4; i++) rig.step([{ ...base, shorten: [0, 0.09, 0, 0, 0] }]);
+      return rig.ons().length;
+    };
+    expect(run(0.7)).toBe(1);
+    expect(run(1.4)).toBe(0);
   });
 });
 

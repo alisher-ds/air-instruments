@@ -36,8 +36,8 @@ export function layoutKeys(w: number, h: number, octaves: number, lowOctave: num
   const whites = 7 * count;
   const left = 0.05 * w;
   const whiteW = (0.9 * w) / whites;
-  const top = 0.66 * h;
-  const keyH = 0.26 * h;
+  const top = 0.62 * h;
+  const keyH = 0.30 * h; // tall keys: easier to aim at
   const keys: Key[] = [];
   let whiteIndex = 0;
   const lastMidi = start + 12 * count - 1;
@@ -77,10 +77,13 @@ export function layoutKeys(w: number, h: number, octaves: number, lowOctave: num
 export function keyAt(p: Vec2, layout: Layout, marginAbove: number): Key | null {
   const { keys, top, bottom } = layout;
   if (p.y < top - marginAbove || p.y > bottom + marginAbove * 0.3) return null;
+  // A fingertip ABOVE the keys could mean the black key or the white key behind it: only the middle of a black key counts then.
+  const above = p.y < top;
   for (let i = keys.length - 1; i >= 0; i--) {
     const k = keys[i]!;
     if (!k.black) continue;
-    if (p.x >= k.x && p.x <= k.x + k.w && p.y <= k.y + k.h) return k;
+    const inset = above ? k.w * 0.2 : 0;
+    if (p.x >= k.x + inset && p.x <= k.x + k.w - inset && p.y <= k.y + k.h) return k;
   }
   for (const k of keys) {
     if (k.black) continue;

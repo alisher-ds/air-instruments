@@ -27,6 +27,7 @@ export const SAVED_KEYS: ReadonlyArray<keyof Config & string> = [
   "pianoOctaves",
   "pianoLowOctave",
   "pianoThumb",
+  "pianoEase",
   "thereminScale",
   "thereminSnap",
   "reverbMix",

@@ -172,10 +172,14 @@ export interface Config {
   pianoLowOctave: number;
   /** Let the thumb play notes (off: it moves too freely and presses by accident). */
   pianoThumb: boolean;
-  /** A press needs the finger's curl (0..1) to RISE by this much within ~150 ms ... */
+  /** A press needs a BEND signal to rise within ~150 ms: the joint angle (`fingerCurl`, 0..1) by this much ... */
   pianoCurlMin: number;
-  /** ... together with the fingertip moving DOWN relative to the palm at least this fast (hand sizes/s). */
+  /** ... or the finger getting SHORTER in the picture (tip closer to its knuckle, 0..1 of the finger length) by this much (a hand facing the camera bends its fingers toward it) ... */
+  pianoFlexMin: number;
+  /** ... or the fingertip moving DOWN relative to the palm at least this fast (hand sizes/s). One of them strong, or two together. */
   pianoRelMin: number;
+  /** Multiplies the three minimums: 0.7 = Easy, 1 = Normal, 1.4 = Strict (buttons on the piano). */
+  pianoEase: number;
   /** Relative speed (hand sizes/s) for the loudest note. */
   pianoRelFull: number;
   /** A finger is dropped if a NEIGHBOUR finger moved this many times more at the same moment (ring and pinky move together). */
@@ -266,12 +270,14 @@ export const DEFAULT_CONFIG: Readonly<Config> = Object.freeze({
   pianoLowOctave: 4,
   pianoThumb: false,
   pianoCurlMin: 0.12,
-  pianoRelMin: 1.5,
+  pianoFlexMin: 0.08,
+  pianoRelMin: 1.2,
+  pianoEase: 0.7,
   pianoRelFull: 7,
   pianoSympathy: 1.6,
   pianoMaxPalmSpeed: 8,
   pianoCooldownMs: 50,
-  pianoReleaseFrac: 0.4,
+  pianoReleaseFrac: 0.5,
   thereminScale: "major-pentatonic",
   thereminSnap: 0.5,
   thereminGlideMs: 60,
@@ -380,7 +386,9 @@ export const TUNABLES: Tunable[] = [
   { kind: "number", group: "Piano", key: "pianoOctaves", label: "octaves of keys", min: 1, max: 3, step: 1 },
   { kind: "number", group: "Piano", key: "pianoLowOctave", label: "lowest octave (4 = middle C)", min: 2, max: 5, step: 1 },
   { kind: "boolean", group: "Piano", key: "pianoThumb", label: "thumb plays notes" },
-  { kind: "number", group: "Piano", key: "pianoCurlMin", label: "press: finger bend at least", min: 0.03, max: 0.5, step: 0.01 },
+  { kind: "number", group: "Piano", key: "pianoEase", label: "sensitivity (0.7 easy, 1 normal, 1.4 strict)", min: 0.4, max: 2, step: 0.05 },
+  { kind: "number", group: "Piano", key: "pianoFlexMin", label: "press: finger gets shorter by", min: 0.02, max: 0.4, step: 0.01 },
+  { kind: "number", group: "Piano", key: "pianoCurlMin", label: "press: joint angle changes by", min: 0.03, max: 0.5, step: 0.01 },
   { kind: "number", group: "Piano", key: "pianoRelMin", label: "press: finger speed at least (hands/s)", min: 0.3, max: 6, step: 0.1 },
   { kind: "number", group: "Piano", key: "pianoRelFull", label: "loudest note at speed (hands/s)", min: 2, max: 20, step: 0.5 },
   { kind: "number", group: "Piano", key: "pianoSympathy", label: "neighbour finger moves x more = ignore", min: 1, max: 5, step: 0.1 },

@@ -440,6 +440,11 @@ canvas#overlay {
   border: 1px solid var(--border);
 }
 
+.harp-label {
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 .harp-select {
   font: inherit;
   font-size: 0.8rem;

@@ -43,6 +43,8 @@ export interface TipView {
   id: number;
   pos: Vec2;
   down: boolean;
+  /** How close the finger is to playing (0..1.3, 1 = it plays): drawn as a ring that fills up. */
+  fill: number;
 }
 
 export class PianoView {
@@ -134,14 +136,21 @@ export class PianoView {
 
     this.drawBlooms(ctx, dt, top);
 
-    // Fingertip markers.
-    ctx.lineWidth = 2;
+    // Fingertip markers: a faint ring, and a ring that FILLS as the finger bends (full = the note plays), so the player sees
+    // what the camera sees and learns how far to bend.
     for (const t of tips) {
-      ctx.strokeStyle = t.down ? "rgba(255,255,255,0.9)" : "rgba(210,225,255,0.38)";
+      ctx.strokeStyle = t.down ? "rgba(255,255,255,0.9)" : "rgba(210,225,255,0.35)";
       ctx.lineWidth = t.down ? 3 : 1.5;
       ctx.beginPath();
-      ctx.arc(t.pos.x, t.pos.y, t.down ? 9 : 6, 0, Math.PI * 2);
+      ctx.arc(t.pos.x, t.pos.y, t.down ? 10 : 8, 0, Math.PI * 2);
       ctx.stroke();
+      if (!t.down && t.fill > 0.08) {
+        ctx.strokeStyle = t.fill >= 1 ? "rgba(120,255,170,0.95)" : "rgba(255,225,140,0.9)";
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(t.pos.x, t.pos.y, 14, -Math.PI / 2, -Math.PI / 2 + Math.min(1, t.fill) * Math.PI * 2);
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
